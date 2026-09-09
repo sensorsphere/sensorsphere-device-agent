@@ -1,0 +1,6 @@
+services:
+  device-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: "${DEVICE_AGENT_IMAGE:-sensorsphere-device-agent:local}"
