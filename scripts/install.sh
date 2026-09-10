@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPOSITORY="${REPOSITORY:-sensorsphere/sensorsphere-device-agent}"
+RAW_BASE_URL="${RAW_BASE_URL:-https://raw.githubusercontent.com}"
+VERSION="${VERSION:-latest}"
+INSTALL_DIR="${INSTALL_DIR:-${HOME}/sensorsphere-device-agent}"
+IMAGE="${DEVICE_AGENT_IMAGE:-ghcr.io/sensorsphere/sensorsphere-device-agent}"
+
+fail() {
+  printf 'ERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+for command_name in curl docker mktemp; do
+  command -v "$command_name" >/dev/null 2>&1 || fail "$command_name is required"
+done
+
+docker compose version >/dev/null 2>&1 || fail "docker compose plugin is required"
+
+if [[ "$VERSION" == "latest" ]]; then
+  SOURCE_REF="master"
+  IMAGE_TAG="latest"
+elif [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+  SOURCE_REF="v${VERSION}"
+  IMAGE_TAG="$VERSION"
+else
+  fail "VERSION must be 'latest' or a semantic version such as 1.0.1"
+fi
+
+ensure_install_dir() {
+  if mkdir -p "$INSTALL_DIR/data" 2>/dev/null; then
+    return
+  fi
+
+  command -v sudo >/dev/null 2>&1 || fail "Cannot create $INSTALL_DIR and sudo is unavailable"
+  sudo mkdir -p "$INSTALL_DIR/data"
+  sudo chown -R "$(id -u):$(id -g)" "$INSTALL_DIR"
+}
+
+ensure_install_dir
+
+TMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMP_DIR"' EXIT
+
+printf 'Installing SensorSphere Device Agent\n'
+printf '  version:      %s\n' "$VERSION"
+printf '  source ref:   %s\n' "$SOURCE_REF"
+printf '  install dir:  %s\n' "$INSTALL_DIR"
+printf '  image:        %s:%s\n' "$IMAGE" "$IMAGE_TAG"
+
+curl -fsSL \
+  "${RAW_BASE_URL}/${REPOSITORY}/${SOURCE_REF}/docker-compose.yml" \
+  -o "$TMP_DIR/docker-compose.yml"
+
+curl -fsSL \
+  "${RAW_BASE_URL}/${REPOSITORY}/${SOURCE_REF}/.env.example" \
+  -o "$TMP_DIR/.env.example"
+
+cp "$TMP_DIR/docker-compose.yml" "$INSTALL_DIR/docker-compose.yml"
+cp "$TMP_DIR/.env.example" "$INSTALL_DIR/.env.example"
+
+if [[ ! -f "$INSTALL_DIR/.env" ]]; then
+  cp "$INSTALL_DIR/.env.example" "$INSTALL_DIR/.env"
+
+  INSTALL_PUID="${PUID:-$(id -u)}"
+  INSTALL_PGID="${PGID:-$(id -g)}"
+
+  {
+    printf '\n# Runtime UID/GID selected by scripts/install.sh\n'
+    printf 'PUID=%s\n' "$INSTALL_PUID"
+    printf 'PGID=%s\n' "$INSTALL_PGID"
+  } >> "$INSTALL_DIR/.env"
+
+  printf 'Created %s/.env from .env.example with PUID=%s PGID=%s\n' \
+    "$INSTALL_DIR" "$INSTALL_PUID" "$INSTALL_PGID"
+else
+  printf 'Preserving existing %s/.env\n' "$INSTALL_DIR"
+
+  if ! grep -q '^PUID=' "$INSTALL_DIR/.env"; then
+    printf '\nPUID=%s\n' "${PUID:-$(id -u)}" >> "$INSTALL_DIR/.env"
+  fi
+
+  if ! grep -q '^PGID=' "$INSTALL_DIR/.env"; then
+    printf 'PGID=%s\n' "${PGID:-$(id -g)}" >> "$INSTALL_DIR/.env"
+  fi
+fi
+
+IMAGE_VALUE="${IMAGE}:${IMAGE_TAG}"
+
+if grep -q '^DEVICE_AGENT_IMAGE=' "$INSTALL_DIR/.env"; then
+  sed -i "s|^DEVICE_AGENT_IMAGE=.*|DEVICE_AGENT_IMAGE=${IMAGE_VALUE}|" "$INSTALL_DIR/.env"
+else
+  printf '\n# Image version selected by scripts/install.sh\nDEVICE_AGENT_IMAGE=%s\n' \
+    "$IMAGE_VALUE" >> "$INSTALL_DIR/.env"
+fi
+
+INSTALL_PUID="$(grep '^PUID=' "$INSTALL_DIR/.env" | tail -1 | cut -d= -f2-)"
+INSTALL_PGID="$(grep '^PGID=' "$INSTALL_DIR/.env" | tail -1 | cut -d= -f2-)"
+
+PUID="$INSTALL_PUID" \
+PGID="$INSTALL_PGID" \
+DEVICE_AGENT_IMAGE="$IMAGE_VALUE" \
+  docker compose \
+    --env-file "$INSTALL_DIR/.env.example" \
+    -f "$INSTALL_DIR/docker-compose.yml" \
+    config -q
+
+cat <<EOF2
+
+Installation files are ready.
+
+Edit the required SensorSphere settings:
+  ${INSTALL_DIR}/.env
+
+At minimum configure:
+  SENSORSPHERE_URL
+  SENSORSPHERE_DEVICE_AGENT_TOKEN
+
+Optional identification:
+  AGENT_NAME
+  AGENT_LABELS
+
+Then start the agent:
+  cd ${INSTALL_DIR}
+  docker compose --env-file .env pull
+  docker compose --env-file .env up -d
+
+Check status with:
+  docker compose --env-file .env ps
+
+Follow logs with:
+  docker compose --env-file .env logs -f device-agent
+
+EOF2
