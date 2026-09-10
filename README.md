@@ -2,7 +2,7 @@
 
 Remote outbound-only agent used by SensorSphere to discover and control devices on networks that are not directly reachable from the SensorSphere server.
 
-Version: **1.0.0**
+Version: **1.0.2**
 
 ## Architecture
 
@@ -45,11 +45,84 @@ Recommended:
 - `AGENT_NAME`
 - `AGENT_LABELS`
 
-## Run with Docker
+## Docker distribution
+
+Published multi-architecture images are available from GitHub Container Registry:
+
+```text
+ghcr.io/sensorsphere/sensorsphere-device-agent:<version>
+ghcr.io/sensorsphere/sensorsphere-device-agent:latest
+```
+
+Supported image platforms:
+
+- `linux/amd64`
+- `linux/arm64`
+
+The recommended deployment method does not require cloning this repository. Run the installer on the target machine:
 
 ```sh
-docker compose up -d
-docker compose logs -f device-agent
+curl -fsSL https://raw.githubusercontent.com/sensorsphere/sensorsphere-device-agent/master/scripts/install.sh | bash
+```
+
+To install a specific release:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/sensorsphere/sensorsphere-device-agent/master/scripts/install.sh | VERSION=1.0.2 bash
+```
+
+By default the installer creates:
+
+```text
+~/sensorsphere-device-agent/
+├── docker-compose.yml
+├── .env
+├── .env.example
+└── data/
+```
+
+It preserves an existing `.env` during upgrades, configures the runtime `PUID`/`PGID`, and selects the requested GHCR image tag.
+
+Edit the generated `.env` and configure at least:
+
+```sh
+SENSORSPHERE_URL=http://my_sensorsphere_base_url:8080
+SENSORSPHERE_DEVICE_AGENT_TOKEN=ssda_replace_me
+```
+
+Recommended identification settings:
+
+```sh
+AGENT_NAME=device-agent-home
+AGENT_LABELS=site-home,lan-main
+```
+
+Then start the agent:
+
+```sh
+cd ~/sensorsphere-device-agent
+docker compose --env-file .env pull
+docker compose --env-file .env up -d
+```
+
+Check status and follow logs:
+
+```sh
+docker compose --env-file .env ps
+docker compose --env-file .env logs -f device-agent
+```
+
+To update an existing installation, rerun the installer with `VERSION=latest` or a specific release and then pull/recreate the service. The existing `.env` is preserved.
+
+The runtime version reported to SensorSphere is read from the `VERSION` file shipped in the image, so the reported agent version follows the published image release.
+
+## Run from a repository checkout
+
+```sh
+cp .env.example .env
+docker compose --env-file .env pull
+docker compose --env-file .env up -d
+docker compose --env-file .env logs -f device-agent
 ```
 
 ## Local development
