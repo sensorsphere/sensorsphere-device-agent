@@ -28,6 +28,13 @@ else
   fail "VERSION must be 'latest' or a semantic version such as 1.0.1"
 fi
 
+PREEXISTING_INSTALL=false
+if [[ -d "$INSTALL_DIR" ]]; then
+  if [[ -f "$INSTALL_DIR/.env" || -f "$INSTALL_DIR/docker-compose.yml" || -d "$INSTALL_DIR/data" ]]; then
+    PREEXISTING_INSTALL=true
+  fi
+fi
+
 ensure_install_dir() {
   if mkdir -p "$INSTALL_DIR/data" 2>/dev/null; then
     return
@@ -61,6 +68,10 @@ cp "$TMP_DIR/docker-compose.yml" "$INSTALL_DIR/docker-compose.yml"
 cp "$TMP_DIR/.env.example" "$INSTALL_DIR/.env.example"
 
 if [[ ! -f "$INSTALL_DIR/.env" ]]; then
+  if [[ "$PREEXISTING_INSTALL" == "true" ]]; then
+    fail "Existing installation detected but $INSTALL_DIR/.env is missing. Refusing to create a replacement .env automatically."
+  fi
+
   cp "$INSTALL_DIR/.env.example" "$INSTALL_DIR/.env"
 
   INSTALL_PUID="${PUID:-$(id -u)}"
@@ -72,10 +83,16 @@ if [[ ! -f "$INSTALL_DIR/.env" ]]; then
     printf 'PGID=%s\n' "$INSTALL_PGID"
   } >> "$INSTALL_DIR/.env"
 
-  printf 'Created %s/.env from .env.example with PUID=%s PGID=%s\n' \
+  printf 'Created new %s/.env from .env.example with PUID=%s PGID=%s\n' \
     "$INSTALL_DIR" "$INSTALL_PUID" "$INSTALL_PGID"
 else
+  ENV_BACKUP="$INSTALL_DIR/.env.backup-$(date +%Y%m%d-%H%M%S)"
+  cp -p "$INSTALL_DIR/.env" "$ENV_BACKUP"
   printf 'Preserving existing %s/.env\n' "$INSTALL_DIR"
+  printf 'Backup created: %s\n' "$ENV_BACKUP"
+
+  SENSORSPHERE_URL_BEFORE="$(sed -n 's/^SENSORSPHERE_URL=//p' "$INSTALL_DIR/.env" | tail -1)"
+  SENSORSPHERE_TOKEN_BEFORE="$(sed -n 's/^SENSORSPHERE_DEVICE_AGENT_TOKEN=//p' "$INSTALL_DIR/.env" | tail -1)"
 
   if ! grep -q '^PUID=' "$INSTALL_DIR/.env"; then
     printf '\nPUID=%s\n' "${PUID:-$(id -u)}" >> "$INSTALL_DIR/.env"
@@ -93,6 +110,16 @@ if grep -q '^DEVICE_AGENT_IMAGE=' "$INSTALL_DIR/.env"; then
 else
   printf '\n# Image version selected by scripts/install.sh\nDEVICE_AGENT_IMAGE=%s\n' \
     "$IMAGE_VALUE" >> "$INSTALL_DIR/.env"
+fi
+
+if [[ -n "${ENV_BACKUP:-}" ]]; then
+  SENSORSPHERE_URL_AFTER="$(sed -n 's/^SENSORSPHERE_URL=//p' "$INSTALL_DIR/.env" | tail -1)"
+  SENSORSPHERE_TOKEN_AFTER="$(sed -n 's/^SENSORSPHERE_DEVICE_AGENT_TOKEN=//p' "$INSTALL_DIR/.env" | tail -1)"
+
+  if [[ "$SENSORSPHERE_URL_AFTER" != "$SENSORSPHERE_URL_BEFORE" || "$SENSORSPHERE_TOKEN_AFTER" != "$SENSORSPHERE_TOKEN_BEFORE" ]]; then
+    cp -p "$ENV_BACKUP" "$INSTALL_DIR/.env"
+    fail "Protected SensorSphere settings changed unexpectedly. Original .env restored from backup."
+  fi
 fi
 
 INSTALL_PUID="$(grep '^PUID=' "$INSTALL_DIR/.env" | tail -1 | cut -d= -f2-)"
