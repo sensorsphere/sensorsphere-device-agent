@@ -1,3 +1,4 @@
+import dgram from "node:dgram";
 import net from "node:net";
 import type { CommandMessage, DeviceIdentity, Provider, ProviderCommandResult } from "../protocol.js";
 
@@ -41,6 +42,43 @@ function parseRgb(value: unknown): number {
   throw new Error("color must be a #RRGGBB string or integer 0..16777215");
 }
 
+
+function parseDiscoveryResponse(message: string, remoteAddress: string): Record<string, unknown> {
+  const headers: Record<string, string> = {};
+  for (const line of message.split(/\r?\n/).slice(1)) {
+    const separator = line.indexOf(":");
+    if (separator <= 0) continue;
+    headers[line.slice(0, separator).trim().toLowerCase()] = line.slice(separator + 1).trim();
+  }
+
+  const location = headers.location ?? "";
+  const locationMatch = /^yeelight:\/\/([^:]+):(\d+)$/i.exec(location);
+  const numberValue = (name: string): number | null => {
+    const raw = headers[name];
+    if (raw == null || raw === "") return null;
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : null;
+  };
+
+  return {
+    id: headers.id ?? null,
+    name: headers.name ?? null,
+    model: headers.model ?? null,
+    firmwareVersion: headers.fw_ver ?? null,
+    ip: locationMatch?.[1] ?? remoteAddress,
+    port: locationMatch ? Number(locationMatch[2]) : 55443,
+    location: location || `yeelight://${remoteAddress}:55443`,
+    support: headers.support ? headers.support.split(/\s+/).filter(Boolean) : [],
+    power: headers.power === "on" ? true : headers.power === "off" ? false : null,
+    brightness: numberValue("bright"),
+    colorMode: numberValue("color_mode"),
+    colorTemperature: numberValue("ct"),
+    rgb: numberValue("rgb"),
+    hue: numberValue("hue"),
+    saturation: numberValue("sat")
+  };
+}
+
 export class YeelightProvider implements Provider {
   readonly provider = "YEELIGHT";
   readonly actions = [
@@ -55,6 +93,59 @@ export class YeelightProvider implements Provider {
   private nextId = 1;
 
   constructor(private readonly timeoutMs: number) {}
+
+
+  async discover(timeoutMs: number): Promise<Array<Record<string, unknown>>> {
+    const timeout = Math.min(Math.max(timeoutMs, 1000), 15000);
+    const payload = Buffer.from(
+      'M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1982\r\nMAN: "ssdp:discover"\r\nST: wifi_bulb\r\n\r\n',
+      "utf8"
+    );
+
+    return new Promise((resolve, reject) => {
+      const socket = dgram.createSocket("udp4");
+      const devices = new Map<string, Record<string, unknown>>();
+      let settled = false;
+      let timer: NodeJS.Timeout | null = null;
+      const probeTimers: NodeJS.Timeout[] = [];
+
+      const finish = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        for (const probeTimer of probeTimers) clearTimeout(probeTimer);
+        try { socket.close(); } catch { /* already closed */ }
+        if (error) reject(error);
+        else resolve([...devices.values()]);
+      };
+
+      const sendProbe = () => {
+        socket.send(payload, 1982, "239.255.255.250", error => {
+          if (error) finish(error);
+        });
+      };
+
+      socket.on("message", (buffer, remote) => {
+        const text = buffer.toString("utf8");
+        if (!/^HTTP\/1\.1 200 OK/i.test(text.trimStart())) return;
+        const device = parseDiscoveryResponse(text, remote.address);
+        const key = String(device.id ?? device.location ?? device.ip ?? remote.address);
+        devices.set(key, device);
+      });
+      socket.once("error", error => finish(error));
+      socket.bind(0, "0.0.0.0", () => {
+        try {
+          socket.setBroadcast(true);
+          sendProbe();
+          probeTimers.push(setTimeout(sendProbe, 500));
+          probeTimers.push(setTimeout(sendProbe, 1200));
+          timer = setTimeout(() => finish(), timeout);
+        } catch (error) {
+          finish(error instanceof Error ? error : new Error(String(error)));
+        }
+      });
+    });
+  }
 
   async execute(command: CommandMessage): Promise<ProviderCommandResult> {
     const ip = resolveIp(command.target?.identities ?? []);

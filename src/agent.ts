@@ -2,7 +2,15 @@ import os from "node:os";
 import WebSocket from "ws";
 import type { AgentConfig } from "./config.js";
 import type { Logger } from "./logger.js";
-import type { CommandMessage, ServerMessage } from "./protocol.js";
+import type { CommandMessage, DiscoverRequestMessage, ServerMessage } from "./protocol.js";
+
+function isDiscoverRequestMessage(message: ServerMessage): message is DiscoverRequestMessage {
+  return message.type === "DISCOVER_REQUEST"
+    && "commandId" in message
+    && typeof message.commandId === "string"
+    && "provider" in message
+    && typeof message.provider === "string";
+}
 
 function isCommandMessage(message: ServerMessage): message is CommandMessage {
   return message.type === "COMMAND"
@@ -147,12 +155,58 @@ export class DeviceAgent {
 
     if (message.type === "HEARTBEAT_ACK") return;
 
+    if (isDiscoverRequestMessage(message)) {
+      await this.executeDiscovery(message);
+      return;
+    }
+
     if (!isCommandMessage(message)) {
       this.logger.debug("Ignoring unsupported server message", { type: message.type });
       return;
     }
 
     await this.executeCommand(message);
+  }
+
+
+  private async executeDiscovery(request: DiscoverRequestMessage): Promise<void> {
+    const timeoutMs = Math.min(Math.max(request.timeoutMs ?? 4000, 1000), 15000);
+    this.logger.info("Executing device discovery", {
+      command_id: request.commandId,
+      provider: request.provider,
+      timeout_ms: timeoutMs
+    });
+
+    try {
+      const devices = await this.providers.discover(request.provider, timeoutMs);
+      this.send({
+        type: "DISCOVER_RESULT",
+        commandId: request.commandId,
+        provider: request.provider,
+        status: "SUCCESS",
+        devices
+      });
+      this.logger.info("Device discovery succeeded", {
+        command_id: request.commandId,
+        provider: request.provider,
+        devices: devices.length
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.send({
+        type: "DISCOVER_RESULT",
+        commandId: request.commandId,
+        provider: request.provider,
+        status: "FAILED",
+        devices: [],
+        error: message
+      });
+      this.logger.warn("Device discovery failed", {
+        command_id: request.commandId,
+        provider: request.provider,
+        error: message
+      });
+    }
   }
 
   private async executeCommand(command: CommandMessage): Promise<void> {

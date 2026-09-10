@@ -33,7 +33,14 @@ export interface HeartbeatAckMessage {
   serverTime: string;
 }
 
-export type ServerMessage = CommandMessage | HelloAckMessage | HeartbeatAckMessage | {
+export interface DiscoverRequestMessage {
+  type: "DISCOVER_REQUEST";
+  commandId: string;
+  provider: string;
+  timeoutMs?: number;
+}
+
+export type ServerMessage = CommandMessage | DiscoverRequestMessage | HelloAckMessage | HeartbeatAckMessage | {
   type: string;
   [key: string]: unknown;
 };
@@ -41,6 +48,7 @@ export type ServerMessage = CommandMessage | HelloAckMessage | HeartbeatAckMessa
 export interface ProviderCapability {
   provider: string;
   actions: string[];
+  discovery?: boolean;
 }
 
 export interface ProviderCommandResult {
@@ -52,4 +60,5 @@ export interface Provider {
   readonly provider: string;
   readonly actions: string[];
   execute(command: CommandMessage): Promise<ProviderCommandResult>;
+  discover?(timeoutMs: number): Promise<Array<Record<string, unknown>>>;
 }

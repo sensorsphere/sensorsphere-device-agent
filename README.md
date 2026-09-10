@@ -2,7 +2,7 @@
 
 Remote outbound-only agent used by SensorSphere to discover and control devices on networks that are not directly reachable from the SensorSphere server.
 
-Version: **1.0.3**
+Version: **1.0.4**
 
 ## Architecture
 
@@ -149,3 +149,10 @@ SensorSphere -> Agent:
 - `COMMAND`
 
 The protocol is intentionally typed. The agent does not expose arbitrary shell execution.
+
+
+## Yeelight discovery
+
+When the `YEELIGHT` provider is available, SensorSphere can ask the Device Agent to discover Yeelight devices on the agent's local network. The agent sends the standard Yeelight LAN `M-SEARCH` UDP multicast request to `239.255.255.250:1982`, collects unicast responses for the requested discovery window, and returns normalized device metadata to SensorSphere over the existing outbound WebSocket.
+
+Discovery requires Yeelight LAN Control to be enabled on the bulbs. No inbound port is opened on the Device Agent host.
