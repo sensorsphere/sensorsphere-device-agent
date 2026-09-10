@@ -2,7 +2,7 @@
 
 Remote outbound-only agent used by SensorSphere to discover and control devices on networks that are not directly reachable from the SensorSphere server.
 
-Version: **1.0.2**
+Version: **1.0.3**
 
 ## Architecture
 
@@ -68,7 +68,7 @@ curl -fsSL https://raw.githubusercontent.com/sensorsphere/sensorsphere-device-ag
 To install a specific release:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/sensorsphere/sensorsphere-device-agent/master/scripts/install.sh | VERSION=1.0.2 bash
+curl -fsSL https://raw.githubusercontent.com/sensorsphere/sensorsphere-device-agent/master/scripts/install.sh | VERSION=1.0.3 bash
 ```
 
 By default the installer creates:
@@ -81,7 +81,7 @@ By default the installer creates:
 └── data/
 ```
 
-It preserves an existing `.env` during upgrades, configures the runtime `PUID`/`PGID`, and selects the requested GHCR image tag.
+It preserves an existing `.env` during upgrades, configures the runtime `PUID`/`PGID`, and updates `DEVICE_AGENT_IMAGE` to the selected GHCR image tag.
 
 Edit the generated `.env` and configure at least:
 
@@ -97,7 +97,7 @@ AGENT_NAME=device-agent-home
 AGENT_LABELS=site-home,lan-main
 ```
 
-Then start the agent:
+For a first installation, edit the generated `.env`, then rerun the installer. Once the required SensorSphere URL and token are configured, the installer automatically pulls the selected image and runs `docker compose up -d`. You can also start it manually:
 
 ```sh
 cd ~/sensorsphere-device-agent
@@ -112,7 +112,7 @@ docker compose --env-file .env ps
 docker compose --env-file .env logs -f device-agent
 ```
 
-To update an existing installation, rerun the installer with `VERSION=latest` or a specific release and then pull/recreate the service. The existing `.env` is preserved.
+To update an existing installation, rerun the installer with `VERSION=latest` or a specific release. The existing `.env` is preserved, `DEVICE_AGENT_IMAGE` is updated to the selected tag, and the installer automatically pulls and recreates the service with `docker compose up -d`.
 
 The runtime version reported to SensorSphere is read from the `VERSION` file shipped in the image, so the reported agent version follows the published image release.
 

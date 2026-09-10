@@ -102,11 +102,49 @@ PUID="$INSTALL_PUID" \
 PGID="$INSTALL_PGID" \
 DEVICE_AGENT_IMAGE="$IMAGE_VALUE" \
   docker compose \
-    --env-file "$INSTALL_DIR/.env.example" \
+    --env-file "$INSTALL_DIR/.env" \
     -f "$INSTALL_DIR/docker-compose.yml" \
     config -q
 
-cat <<EOF2
+read_env_value() {
+  local key="$1"
+  sed -n "s/^${key}=//p" "$INSTALL_DIR/.env" | tail -1
+}
+
+SENSORSPHERE_URL_VALUE="$(read_env_value SENSORSPHERE_URL)"
+SENSORSPHERE_TOKEN_VALUE="$(read_env_value SENSORSPHERE_DEVICE_AGENT_TOKEN)"
+
+CONFIGURED=true
+if [[ -z "$SENSORSPHERE_URL_VALUE" || "$SENSORSPHERE_URL_VALUE" == "http://my_sensorsphere_base_url:8080" ]]; then
+  CONFIGURED=false
+fi
+if [[ -z "$SENSORSPHERE_TOKEN_VALUE" || "$SENSORSPHERE_TOKEN_VALUE" == "ssda_replace_me" ]]; then
+  CONFIGURED=false
+fi
+
+if [[ "$CONFIGURED" == "true" ]]; then
+  printf '\nUpdating SensorSphere Device Agent container...\n'
+  (
+    cd "$INSTALL_DIR"
+    docker compose --env-file .env pull
+    docker compose --env-file .env up -d
+  )
+
+  cat <<EOF2
+
+SensorSphere Device Agent is running.
+  image: ${IMAGE_VALUE}
+
+Check status with:
+  cd ${INSTALL_DIR}
+  docker compose --env-file .env ps
+
+Follow logs with:
+  docker compose --env-file .env logs -f device-agent
+
+EOF2
+else
+  cat <<EOF2
 
 Installation files are ready.
 
@@ -121,15 +159,10 @@ Optional identification:
   AGENT_NAME
   AGENT_LABELS
 
-Then start the agent:
+Then rerun the installer to pull and start the selected image, or start manually with:
   cd ${INSTALL_DIR}
   docker compose --env-file .env pull
   docker compose --env-file .env up -d
 
-Check status with:
-  docker compose --env-file .env ps
-
-Follow logs with:
-  docker compose --env-file .env logs -f device-agent
-
 EOF2
+fi

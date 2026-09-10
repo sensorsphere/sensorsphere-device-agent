@@ -1,6 +1,6 @@
 {
   "name": "sensorsphere-device-agent",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "private": true,
   "description": "SensorSphere remote device discovery and control agent",
   "type": "module",
