@@ -3,6 +3,9 @@ services:
     image: "${DEVICE_AGENT_IMAGE:-ghcr.io/sensorsphere/sensorsphere-device-agent:latest}"
     restart: unless-stopped
     user: "${PUID}:${PGID}"
+    # Host networking is required for LAN discovery providers such as Yeelight,
+    # whose UDP multicast discovery traffic does not traverse Docker bridge NAT.
+    network_mode: host
     environment:
       SENSORSPHERE_URL: "${SENSORSPHERE_URL}"
       SENSORSPHERE_DEVICE_AGENT_TOKEN: "${SENSORSPHERE_DEVICE_AGENT_TOKEN}"

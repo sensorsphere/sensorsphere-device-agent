@@ -2,7 +2,7 @@
 
 Remote outbound-only agent used by SensorSphere to discover and control devices on networks that are not directly reachable from the SensorSphere server.
 
-Version: **1.0.4**
+Version: **1.0.5**
 
 ## Architecture
 
@@ -68,7 +68,7 @@ curl -fsSL https://raw.githubusercontent.com/sensorsphere/sensorsphere-device-ag
 To install a specific release:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/sensorsphere/sensorsphere-device-agent/master/scripts/install.sh | VERSION=1.0.3 bash
+curl -fsSL https://raw.githubusercontent.com/sensorsphere/sensorsphere-device-agent/master/scripts/install.sh | VERSION=1.0.5 bash
 ```
 
 By default the installer creates:
@@ -82,6 +82,8 @@ By default the installer creates:
 ```
 
 It preserves an existing `.env` during upgrades, configures the runtime `PUID`/`PGID`, and updates `DEVICE_AGENT_IMAGE` to the selected GHCR image tag.
+
+The production Compose service uses Linux host networking. This is intentional: LAN discovery providers such as Yeelight rely on local UDP multicast/broadcast traffic that is not reliably delivered through Docker bridge networking. The agent exposes no listening application port, so host networking does not publish an additional SensorSphere service port.
 
 Edit the generated `.env` and configure at least:
 
@@ -155,4 +157,6 @@ The protocol is intentionally typed. The agent does not expose arbitrary shell e
 
 When the `YEELIGHT` provider is available, SensorSphere can ask the Device Agent to discover Yeelight devices on the agent's local network. The agent sends the standard Yeelight LAN `M-SEARCH` UDP multicast request to `239.255.255.250:1982`, collects unicast responses for the requested discovery window, and returns normalized device metadata to SensorSphere over the existing outbound WebSocket.
 
-Discovery requires Yeelight LAN Control to be enabled on the bulbs. No inbound port is opened on the Device Agent host.
+The Device Agent must run on the same local network segment as the Yeelight devices for multicast discovery. Routed TCP connectivity to port `55443` is sufficient for control but does not make multicast discovery cross routers. The supplied Docker Compose file therefore uses `network_mode: host` so the container participates directly in the host network stack.
+
+Discovery requires Yeelight LAN Control to be enabled on the bulbs. No inbound SensorSphere port is opened on the Device Agent host.
