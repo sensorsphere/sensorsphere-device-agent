@@ -12,6 +12,8 @@ export interface AgentConfig {
   reconnectInitialMs: number;
   reconnectMaxMs: number;
   yeelightRequestTimeoutMs: number;
+  esphomeRequestTimeoutMs: number;
+  esphomeNoisePsk: string | null;
 }
 
 function required(name: string): string {
@@ -64,6 +66,8 @@ export function loadConfig(): AgentConfig {
     heartbeatIntervalMs: positiveInt("SENSORSPHERE_HEARTBEAT_INTERVAL_SECONDS", 20) * 1000,
     reconnectInitialMs: positiveInt("SENSORSPHERE_RECONNECT_INITIAL_MS", 1000),
     reconnectMaxMs: positiveInt("SENSORSPHERE_RECONNECT_MAX_MS", 30000),
-    yeelightRequestTimeoutMs: positiveInt("YEELIGHT_REQUEST_TIMEOUT_MS", 5000)
+    yeelightRequestTimeoutMs: positiveInt("YEELIGHT_REQUEST_TIMEOUT_MS", 5000),
+    esphomeRequestTimeoutMs: positiveInt("ESPHOME_REQUEST_TIMEOUT_MS", 5000),
+    esphomeNoisePsk: process.env.ESPHOME_NOISE_PSK?.trim() || null
   };
 }

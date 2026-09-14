@@ -2,7 +2,7 @@
 
 Remote outbound-only agent used by SensorSphere to discover and control devices on networks that are not directly reachable from the SensorSphere server.
 
-Version: **1.0.9**
+Version: **1.0.10**
 
 ## Architecture
 
@@ -180,3 +180,12 @@ Actions executed on a discovered Yeelight return the refreshed state of that bul
 ## Yeelight richer control
 
 Registered Yeelight devices support power, brightness, RGB, color temperature, HSV, toggle, configurable smooth transitions, Set default, and device naming through SensorSphere Device Control.
+
+
+## ESPHome provider foundation
+
+The `ESPHOME` provider uses the ESPHome Native API on its standard TCP port 6053. The initial provider supports `GET_STATE`, `POWER_ON`, `POWER_OFF`, and `TOGGLE` for `light` and `switch` entities.
+
+A Device Registry entry must provide an `IP`, `FQDN`, or `HOSTNAME` identity. If the ESPHome node exposes more than one controllable light/switch entity, also add an `ESPHOME_ENTITY` identity in the form `light:<object_id>` or `switch:<object_id>`. When exactly one light/switch entity exists, the provider selects it automatically.
+
+For Native API encryption, configure `ESPHOME_NOISE_PSK` on the Device Agent. V1 uses one optional PSK per Device Agent, which is suitable for installations that share an ESPHome API encryption key across devices. Leave it empty for unencrypted Native API endpoints.

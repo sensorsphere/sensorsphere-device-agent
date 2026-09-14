@@ -2,6 +2,7 @@ import { DeviceAgent } from "./agent.js";
 import { loadConfig } from "./config.js";
 import { Logger } from "./logger.js";
 import { ProviderRegistry } from "./providers/registry.js";
+import { EspHomeProvider } from "./providers/esphome.js";
 import { YeelightProvider } from "./providers/yeelight.js";
 
 try {
@@ -9,6 +10,7 @@ try {
   const logger = new Logger(config.logLevel);
   const providers = new ProviderRegistry();
   providers.register(new YeelightProvider(config.yeelightRequestTimeoutMs));
+  providers.register(new EspHomeProvider(config.esphomeRequestTimeoutMs, config.esphomeNoisePsk));
 
   const agent = new DeviceAgent(config, providers, logger);
 
