@@ -1,19 +1,39 @@
-import { Bonjour } from "bonjour-service";
+import { createRequire } from "node:module";
+import { networkInterfaces } from "node:os";
 import { entityId, openEspHomeClient } from "esphome-client";
 import type { CommandMessage, DeviceIdentity, Provider, ProviderCommandResult } from "../protocol.js";
 
 type EspHomeEntityType = "light" | "switch";
 
+type MdnsRecord = {
+  name?: string;
+  type?: string;
+  data?: unknown;
+};
+
+type MdnsPacket = {
+  answers?: MdnsRecord[];
+  additionals?: MdnsRecord[];
+};
+
+type MdnsInstance = {
+  on(event: "ready", listener: () => void): MdnsInstance;
+  on(event: "response", listener: (packet: MdnsPacket) => void): MdnsInstance;
+  on(event: "error", listener: (error: Error) => void): MdnsInstance;
+  query(query: { questions: Array<{ name: string; type: string }> }): void;
+  destroy(): void;
+};
+
+type MdnsFactory = (options?: Record<string, unknown>) => MdnsInstance;
+
+const require = createRequire(import.meta.url);
+const mdnsFactory = require("multicast-dns") as MdnsFactory;
+const ESPHOME_SERVICE = "_esphomelib._tcp.local";
+
 function textValue(value: unknown): string {
   if (typeof value === "string") return value.trim();
   if (Buffer.isBuffer(value)) return value.toString("utf8").trim();
   return value == null ? "" : String(value).trim();
-}
-
-function ipv4Address(service: any): string | null {
-  const addresses = Array.isArray(service?.addresses) ? service.addresses : [];
-  const ipv4 = addresses.find((value: unknown) => typeof value === "string" && /^\d{1,3}(?:\.\d{1,3}){3}$/.test(value));
-  return typeof ipv4 === "string" ? ipv4 : null;
 }
 
 function normalizeMacAddress(value: unknown): string {
@@ -22,6 +42,85 @@ function normalizeMacAddress(value: unknown): string {
   return compact.match(/.{2}/g)?.join(":") ?? compact;
 }
 
+function decodeTxt(value: unknown): Record<string, string> {
+  const result: Record<string, string> = {};
+  if (!Array.isArray(value)) return result;
+
+  for (const entry of value) {
+    const text = textValue(entry);
+    if (!text) continue;
+    const separator = text.indexOf("=");
+    const key = separator >= 0 ? text.slice(0, separator) : text;
+    const itemValue = separator >= 0 ? text.slice(separator + 1) : "";
+    if (key) result[key] = itemValue;
+  }
+  return result;
+}
+
+function activeIpv4Addresses(): string[] {
+  const addresses = new Set<string>();
+  for (const entries of Object.values(networkInterfaces())) {
+    for (const entry of entries ?? []) {
+      if (entry.family !== "IPv4" || entry.internal) continue;
+      addresses.add(entry.address);
+    }
+  }
+  return [...addresses].sort();
+}
+
+function normalizeDnsName(value: unknown): string {
+  return textValue(value).replace(/\.$/, "");
+}
+
+function recordNameEquals(record: MdnsRecord, value: string): boolean {
+  return normalizeDnsName(record.name).toLowerCase() === normalizeDnsName(value).toLowerCase();
+}
+
+function packetRecords(packet: MdnsPacket): MdnsRecord[] {
+  return [...(packet.answers ?? []), ...(packet.additionals ?? [])];
+}
+
+function extractServices(packet: MdnsPacket): Array<Record<string, unknown>> {
+  const records = packetRecords(packet);
+  const ptrRecords = records.filter(record =>
+    record.type === "PTR" && recordNameEquals(record, ESPHOME_SERVICE)
+  );
+  const devices: Array<Record<string, unknown>> = [];
+
+  for (const ptr of ptrRecords) {
+    const instance = normalizeDnsName(ptr.data);
+    if (!instance) continue;
+
+    const srv = records.find(record => record.type === "SRV" && recordNameEquals(record, instance));
+    const txtRecord = records.find(record => record.type === "TXT" && recordNameEquals(record, instance));
+    const srvData = srv?.data as { port?: unknown; target?: unknown } | undefined;
+    const host = normalizeDnsName(srvData?.target);
+    const addressRecord = host
+      ? records.find(record => record.type === "A" && recordNameEquals(record, host))
+      : undefined;
+    const ip = textValue(addressRecord?.data);
+    const txt = decodeTxt(txtRecord?.data);
+    const serviceName = instance.replace(/\._esphomelib\._tcp\.local$/i, "");
+    const mac = normalizeMacAddress(txt.mac);
+
+    devices.push({
+      id: mac || host || serviceName,
+      name: txt.friendly_name || serviceName,
+      ip,
+      hostname: host,
+      port: Number(srvData?.port ?? 6053),
+      mac,
+      model: txt.board ?? "",
+      firmwareVersion: txt.version ?? "",
+      platform: txt.platform ?? "",
+      network: txt.network ?? "",
+      apiEncryption: txt.api_encryption ?? "",
+      entities: []
+    });
+  }
+
+  return devices;
+}
 
 interface ResolvedTarget {
   host: string;
@@ -108,68 +207,90 @@ export class EspHomeProvider implements Provider {
   ) {}
 
   async discover(timeoutMs: number): Promise<Array<Record<string, unknown>>> {
-    const bonjour = new Bonjour(undefined, () => undefined);
+    const interfaces = activeIpv4Addresses();
     const found = new Map<string, Record<string, unknown>>();
-    const enrichments: Promise<void>[] = [];
+    const sockets: MdnsInstance[] = [];
+
+    console.info(`[ESPHOME] Starting mDNS discovery on ${interfaces.length} IPv4 interface(s): ${interfaces.join(", ") || "none"}`);
 
     try {
-      bonjour.find({ type: "esphomelib", protocol: "tcp" }, service => {
-        const txt = service.txt ?? {};
-        const host = textValue(service.host).replace(/\.$/, "");
-        const ip = ipv4Address(service);
-        const mac = normalizeMacAddress((txt as Record<string, unknown>).mac);
-        const key = mac || ip || host || service.name;
-        if (!key || found.has(key)) return;
+      for (const address of interfaces) {
+        const socket = mdnsFactory({
+          interface: address,
+          bind: "0.0.0.0",
+          port: 5353,
+          multicast: true,
+          loopback: true,
+          reuseAddr: true
+        });
+        sockets.push(socket);
 
-        const device: Record<string, unknown> = {
-          id: mac || host || service.name,
-          name: textValue((txt as Record<string, unknown>).friendly_name) || service.name,
-          ip: ip ?? "",
-          hostname: host,
-          port: service.port,
-          mac,
-          model: textValue((txt as Record<string, unknown>).board),
-          firmwareVersion: textValue((txt as Record<string, unknown>).version),
-          platform: textValue((txt as Record<string, unknown>).platform),
-          network: textValue((txt as Record<string, unknown>).network),
-          apiEncryption: textValue((txt as Record<string, unknown>).api_encryption),
-          entities: []
-        };
-        found.set(key, device);
+        socket.on("ready", () => {
+          console.info(`[ESPHOME] Querying ${ESPHOME_SERVICE} via ${address}`);
+          socket.query({ questions: [{ name: ESPHOME_SERVICE, type: "PTR" }] });
+        });
 
-        const connectionHost = ip || host;
-        if (!connectionHost) return;
-        enrichments.push((async () => {
-          let client: any = null;
-          try {
-            client = await openEspHomeClient({ host: connectionHost, psk: this.noisePsk });
-            const info = client.deviceInfo?.();
-            if (info) {
-              device.name = info.name || device.name;
-              device.firmwareVersion = info.esphomeVersion || device.firmwareVersion;
-              device.mac = normalizeMacAddress(info.macAddress) || device.mac;
-              device.id = device.mac || device.id;
+        socket.on("response", packet => {
+          for (const device of extractServices(packet)) {
+            const key = String(device.mac || device.ip || device.hostname || device.id);
+            if (!key) continue;
+            if (!found.has(key)) {
+              console.info(`[ESPHOME] mDNS found ${String(device.hostname || device.name)} at ${String(device.ip || "?")}:${String(device.port || 6053)} via ${address}`);
             }
-            const available = client.getAvailableEntityIds?.() as Record<string, string[]> | undefined;
-            if (available) {
-              device.entities = ["light", "switch"]
-                .flatMap(type => (available[type] ?? []).map(id => `${type}:${String(id).replace(new RegExp(`^${type}-`), "")}`))
-                .sort();
-            }
-          } catch (error) {
-            device.apiError = error instanceof Error ? error.message : String(error);
-          } finally {
-            if (client) await disposeClient(client);
+            found.set(key, { ...(found.get(key) ?? {}), ...device });
           }
-        })());
-      });
+        });
+
+        socket.on("error", error => {
+          console.warn(`[ESPHOME] mDNS socket error on ${address}: ${error.message}`);
+        });
+      }
 
       await new Promise(resolve => setTimeout(resolve, Math.max(500, timeoutMs)));
-      await Promise.allSettled(enrichments);
-      return [...found.values()];
     } finally {
-      bonjour.destroy();
+      for (const socket of sockets) {
+        try { socket.destroy(); } catch { /* no-op */ }
+      }
     }
+
+    const devices = [...found.values()];
+    console.info(`[ESPHOME] mDNS discovery completed: ${devices.length} device(s)`);
+
+    await Promise.allSettled(devices.map(async device => {
+      const connectionHost = textValue(device.ip) || textValue(device.hostname);
+      if (!connectionHost) return;
+
+      let client: any = null;
+      try {
+        console.info(`[ESPHOME] Connecting Native API to ${connectionHost}:${String(device.port || 6053)}`);
+        client = await openEspHomeClient({ host: connectionHost, psk: this.noisePsk });
+        const info = client.deviceInfo?.();
+        if (info) {
+          device.name = info.name || device.name;
+          device.firmwareVersion = info.esphomeVersion || device.firmwareVersion;
+          device.mac = normalizeMacAddress(info.macAddress) || device.mac;
+          device.id = device.mac || device.id;
+        }
+        const available = client.getAvailableEntityIds?.() as Record<string, string[]> | undefined;
+        if (available) {
+          const lights = available.light ?? [];
+          const switches = available.switch ?? [];
+          device.entities = [
+            ...lights.map(id => `light:${String(id).replace(/^light-/, "")}`),
+            ...switches.map(id => `switch:${String(id).replace(/^switch-/, "")}`)
+          ].sort();
+          console.info(`[ESPHOME] Native API ${connectionHost}: ${lights.length} light(s), ${switches.length} switch(es)`);
+        }
+      } catch (error) {
+        device.apiError = error instanceof Error ? error.message : String(error);
+        console.warn(`[ESPHOME] Native API enrichment failed for ${connectionHost}: ${String(device.apiError)}`);
+      } finally {
+        if (client) await disposeClient(client);
+      }
+    }));
+
+    console.info(`[ESPHOME] Discovery completed: ${devices.length} device(s)`);
+    return devices;
   }
 
   async execute(command: CommandMessage): Promise<ProviderCommandResult> {
