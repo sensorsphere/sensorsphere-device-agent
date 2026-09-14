@@ -11,7 +11,8 @@ test("YeelightProvider advertises the V1 actions", () => {
     "POWER_OFF",
     "SET_BRIGHTNESS",
     "SET_COLOR",
-    "SET_COLOR_TEMPERATURE"
+    "SET_COLOR_TEMPERATURE",
+    "SET_NAME"
   ]);
 });
 

@@ -2,7 +2,7 @@
 
 Remote outbound-only agent used by SensorSphere to discover and control devices on networks that are not directly reachable from the SensorSphere server.
 
-Version: **1.0.6**
+Version: **1.0.7**
 
 ## Architecture
 
@@ -165,3 +165,7 @@ Discovery requires Yeelight LAN Control to be enabled on the bulbs. No inbound S
 ## Actions on discovered devices
 
 SensorSphere can execute provider-specific actions on devices found by discovery before import. Yeelight supports `SET_NAME`, which sends the LAN `set_name` command to the discovered IP.
+
+## Yeelight discovery actions
+
+Discovery results support `SET_NAME`, `POWER_ON`, and `POWER_OFF` so an operator can rename or visually identify a discovered bulb before importing it into Device Registry. Registered Yeelight devices also expose `SET_NAME` through Device Control.

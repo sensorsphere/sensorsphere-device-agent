@@ -102,7 +102,8 @@ export class YeelightProvider implements Provider {
     "POWER_OFF",
     "SET_BRIGHTNESS",
     "SET_COLOR",
-    "SET_COLOR_TEMPERATURE"
+    "SET_COLOR_TEMPERATURE",
+    "SET_NAME"
   ];
 
   private nextId = 1;
@@ -163,11 +164,18 @@ export class YeelightProvider implements Provider {
   }
 
   async executeDiscoveredAction(action: string, target: Record<string, unknown>, parameters: Record<string, unknown>): Promise<Record<string, unknown>> {
-    if (action !== "SET_NAME") throw new Error(`Unsupported Yeelight discovered-device action ${action}`);
     const ip = requireDiscoveredIp(target);
-    const name = requireName(parameters);
-    await this.call(ip, "set_name", [name]);
-    return { ok: true, ip, name };
+    if (action === "SET_NAME") {
+      const name = requireName(parameters);
+      await this.call(ip, "set_name", [name]);
+      return { ok: true, ip, name };
+    }
+    if (action === "POWER_ON" || action === "POWER_OFF") {
+      const power = action === "POWER_ON" ? "on" : "off";
+      await this.call(ip, "set_power", [power, "smooth", 300]);
+      return { ok: true, ip, power: power === "on" };
+    }
+    throw new Error(`Unsupported Yeelight discovered-device action ${action}`);
   }
 
   async execute(command: CommandMessage): Promise<ProviderCommandResult> {
@@ -196,6 +204,8 @@ export class YeelightProvider implements Provider {
         throw new Error("colorTemperature must be between 1700 and 6500 K");
       }
       await this.call(ip, "set_ct_abx", [kelvin, "smooth", 300]);
+    } else if (command.action === "SET_NAME") {
+      await this.call(ip, "set_name", [requireName(parameters)]);
     } else {
       throw new Error(`Unsupported Yeelight action ${command.action}`);
     }
@@ -205,7 +215,7 @@ export class YeelightProvider implements Provider {
   }
 
   private async getState(ip: string): Promise<Record<string, unknown>> {
-    const response = await this.call(ip, "get_prop", ["power", "bright", "rgb", "ct", "hue", "sat"]);
+    const response = await this.call(ip, "get_prop", ["power", "bright", "rgb", "ct", "hue", "sat", "name"]);
     const values = response.result ?? [];
     return {
       power: values[0] === "on",
@@ -213,7 +223,8 @@ export class YeelightProvider implements Provider {
       rgb: Number(values[2] ?? 0),
       colorTemperature: Number(values[3] ?? 0),
       hue: Number(values[4] ?? 0),
-      saturation: Number(values[5] ?? 0)
+      saturation: Number(values[5] ?? 0),
+      name: String(values[6] ?? "")
     };
   }
 
