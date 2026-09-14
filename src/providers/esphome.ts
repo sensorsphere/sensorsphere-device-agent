@@ -1,7 +1,27 @@
+import { Bonjour } from "bonjour-service";
 import { entityId, openEspHomeClient } from "esphome-client";
 import type { CommandMessage, DeviceIdentity, Provider, ProviderCommandResult } from "../protocol.js";
 
 type EspHomeEntityType = "light" | "switch";
+
+function textValue(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (Buffer.isBuffer(value)) return value.toString("utf8").trim();
+  return value == null ? "" : String(value).trim();
+}
+
+function ipv4Address(service: any): string | null {
+  const addresses = Array.isArray(service?.addresses) ? service.addresses : [];
+  const ipv4 = addresses.find((value: unknown) => typeof value === "string" && /^\d{1,3}(?:\.\d{1,3}){3}$/.test(value));
+  return typeof ipv4 === "string" ? ipv4 : null;
+}
+
+function normalizeMacAddress(value: unknown): string {
+  const compact = textValue(value).replace(/[^0-9A-Fa-f]/g, "").toUpperCase();
+  if (compact.length !== 12) return textValue(value);
+  return compact.match(/.{2}/g)?.join(":") ?? compact;
+}
+
 
 interface ResolvedTarget {
   host: string;
@@ -86,6 +106,71 @@ export class EspHomeProvider implements Provider {
     private readonly requestTimeoutMs = 5000,
     private readonly noisePsk: string | null = null
   ) {}
+
+  async discover(timeoutMs: number): Promise<Array<Record<string, unknown>>> {
+    const bonjour = new Bonjour(undefined, () => undefined);
+    const found = new Map<string, Record<string, unknown>>();
+    const enrichments: Promise<void>[] = [];
+
+    try {
+      bonjour.find({ type: "esphomelib", protocol: "tcp" }, service => {
+        const txt = service.txt ?? {};
+        const host = textValue(service.host).replace(/\.$/, "");
+        const ip = ipv4Address(service);
+        const mac = normalizeMacAddress((txt as Record<string, unknown>).mac);
+        const key = mac || ip || host || service.name;
+        if (!key || found.has(key)) return;
+
+        const device: Record<string, unknown> = {
+          id: mac || host || service.name,
+          name: textValue((txt as Record<string, unknown>).friendly_name) || service.name,
+          ip: ip ?? "",
+          hostname: host,
+          port: service.port,
+          mac,
+          model: textValue((txt as Record<string, unknown>).board),
+          firmwareVersion: textValue((txt as Record<string, unknown>).version),
+          platform: textValue((txt as Record<string, unknown>).platform),
+          network: textValue((txt as Record<string, unknown>).network),
+          apiEncryption: textValue((txt as Record<string, unknown>).api_encryption),
+          entities: []
+        };
+        found.set(key, device);
+
+        const connectionHost = ip || host;
+        if (!connectionHost) return;
+        enrichments.push((async () => {
+          let client: any = null;
+          try {
+            client = await openEspHomeClient({ host: connectionHost, psk: this.noisePsk });
+            const info = client.deviceInfo?.();
+            if (info) {
+              device.name = info.name || device.name;
+              device.firmwareVersion = info.esphomeVersion || device.firmwareVersion;
+              device.mac = normalizeMacAddress(info.macAddress) || device.mac;
+              device.id = device.mac || device.id;
+            }
+            const available = client.getAvailableEntityIds?.() as Record<string, string[]> | undefined;
+            if (available) {
+              device.entities = ["light", "switch"]
+                .flatMap(type => (available[type] ?? []).map(id => `${type}:${String(id).replace(new RegExp(`^${type}-`), "")}`))
+                .sort();
+            }
+          } catch (error) {
+            device.apiError = error instanceof Error ? error.message : String(error);
+          } finally {
+            if (client) await disposeClient(client);
+          }
+        })());
+      });
+
+      await new Promise(resolve => setTimeout(resolve, Math.max(500, timeoutMs)));
+      await Promise.allSettled(enrichments);
+      return [...found.values()];
+    } finally {
+      bonjour.destroy();
+    }
+  }
 
   async execute(command: CommandMessage): Promise<ProviderCommandResult> {
     const identities = command.target?.identities ?? [];

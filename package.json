@@ -1,6 +1,6 @@
 {
   "name": "sensorsphere-device-agent",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "private": true,
   "description": "SensorSphere remote device discovery and control agent",
   "type": "module",
@@ -14,6 +14,7 @@
     "node": ">=22.20"
   },
   "dependencies": {
+    "bonjour-service": "^1.4.4",
     "esphome-client": "^2.0.0",
     "ws": "^8.18.3"
   },

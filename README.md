@@ -2,7 +2,7 @@
 
 Remote outbound-only agent used by SensorSphere to discover and control devices on networks that are not directly reachable from the SensorSphere server.
 
-Version: **1.0.10**
+Version: **1.0.11**
 
 ## Architecture
 
@@ -189,3 +189,5 @@ The `ESPHOME` provider uses the ESPHome Native API on its standard TCP port 6053
 A Device Registry entry must provide an `IP`, `FQDN`, or `HOSTNAME` identity. If the ESPHome node exposes more than one controllable light/switch entity, also add an `ESPHOME_ENTITY` identity in the form `light:<object_id>` or `switch:<object_id>`. When exactly one light/switch entity exists, the provider selects it automatically.
 
 For Native API encryption, configure `ESPHOME_NOISE_PSK` on the Device Agent. V1 uses one optional PSK per Device Agent, which is suitable for installations that share an ESPHome API encryption key across devices. Leave it empty for unencrypted Native API endpoints.
+
+ESPHome discovery uses mDNS/DNS-SD `_esphomelib._tcp` advertisements on the local LAN. The Device Agent must therefore run with host networking and on a segment where ESPHome mDNS is visible. Discovery reports the node name, IP/hostname, API port, MAC address, board, ESPHome firmware version, and advertised light/switch entities when the Native API connection can be opened with the configured PSK.
