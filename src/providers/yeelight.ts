@@ -33,6 +33,15 @@ function requireNumber(parameters: Record<string, unknown>, key: string): number
   return value;
 }
 
+function transition(parameters: Record<string, unknown>): ["sudden" | "smooth", number] {
+  const raw = parameters.transitionMs;
+  if (raw == null) return ["smooth", 300];
+  if (typeof raw !== "number" || !Number.isFinite(raw)) throw new Error("transitionMs must be a finite number");
+  const duration = Math.round(raw);
+  if (duration < 0 || duration > 30000) throw new Error("transitionMs must be between 0 and 30000");
+  return duration === 0 ? ["sudden", 0] : ["smooth", Math.max(30, duration)];
+}
+
 function parseRgb(value: unknown): number {
   if (typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 0xffffff) {
     return value;
@@ -119,6 +128,9 @@ export class YeelightProvider implements Provider {
     "SET_BRIGHTNESS",
     "SET_COLOR",
     "SET_COLOR_TEMPERATURE",
+    "SET_HSV",
+    "TOGGLE",
+    "SET_DEFAULT",
     "SET_NAME"
   ];
 
@@ -207,22 +219,38 @@ export class YeelightProvider implements Provider {
     }
 
     if (command.action === "POWER_ON") {
-      await this.call(ip, "set_power", ["on", "smooth", 300]);
+      const [effect, duration] = transition(parameters);
+      await this.call(ip, "set_power", ["on", effect, duration]);
     } else if (command.action === "POWER_OFF") {
-      await this.call(ip, "set_power", ["off", "smooth", 300]);
+      const [effect, duration] = transition(parameters);
+      await this.call(ip, "set_power", ["off", effect, duration]);
     } else if (command.action === "SET_BRIGHTNESS") {
       const brightness = Math.round(requireNumber(parameters, "brightness"));
       if (brightness < 1 || brightness > 100) throw new Error("brightness must be between 1 and 100");
-      await this.call(ip, "set_bright", [brightness, "smooth", 300]);
+      const [effect, duration] = transition(parameters);
+      await this.call(ip, "set_bright", [brightness, effect, duration]);
     } else if (command.action === "SET_COLOR") {
       const rgb = parseRgb(parameters.color ?? parameters.rgb);
-      await this.call(ip, "set_rgb", [rgb, "smooth", 300]);
+      const [effect, duration] = transition(parameters);
+      await this.call(ip, "set_rgb", [rgb, effect, duration]);
     } else if (command.action === "SET_COLOR_TEMPERATURE") {
       const kelvin = Math.round(requireNumber(parameters, "colorTemperature"));
       if (kelvin < 1700 || kelvin > 6500) {
         throw new Error("colorTemperature must be between 1700 and 6500 K");
       }
-      await this.call(ip, "set_ct_abx", [kelvin, "smooth", 300]);
+      const [effect, duration] = transition(parameters);
+      await this.call(ip, "set_ct_abx", [kelvin, effect, duration]);
+    } else if (command.action === "SET_HSV") {
+      const hue = Math.round(requireNumber(parameters, "hue"));
+      const saturation = Math.round(requireNumber(parameters, "saturation"));
+      if (hue < 0 || hue > 359) throw new Error("hue must be between 0 and 359");
+      if (saturation < 0 || saturation > 100) throw new Error("saturation must be between 0 and 100");
+      const [effect, duration] = transition(parameters);
+      await this.call(ip, "set_hsv", [hue, saturation, effect, duration]);
+    } else if (command.action === "TOGGLE") {
+      await this.call(ip, "toggle", []);
+    } else if (command.action === "SET_DEFAULT") {
+      await this.call(ip, "set_default", []);
     } else if (command.action === "SET_NAME") {
       await this.call(ip, "set_name", [requireName(parameters)]);
     } else {

@@ -12,6 +12,9 @@ test("YeelightProvider advertises the V1 actions", () => {
     "SET_BRIGHTNESS",
     "SET_COLOR",
     "SET_COLOR_TEMPERATURE",
+    "SET_HSV",
+    "TOGGLE",
+    "SET_DEFAULT",
     "SET_NAME"
   ]);
 });
