@@ -2,7 +2,7 @@
 
 Remote outbound-only agent used by SensorSphere to discover and control devices on networks that are not directly reachable from the SensorSphere server.
 
-Version: **1.0.11**
+Version: **1.0.12**
 
 ## Architecture
 
@@ -58,6 +58,7 @@ Supported image platforms:
 
 - `linux/amd64`
 - `linux/arm64`
+- `linux/arm/v7`
 
 The recommended deployment method does not require cloning this repository. Run the installer on the target machine:
 
