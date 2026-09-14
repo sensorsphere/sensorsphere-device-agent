@@ -177,22 +177,40 @@ async function disposeClient(client: unknown): Promise<void> {
   if (typeof disconnect === "function") await (disconnect as () => Promise<void>).call(client);
 }
 
-async function waitForCachedState(client: any, id: any, timeoutMs: number): Promise<Record<string, unknown>> {
+async function waitForBooleanState(client: any, id: any, timeoutMs: number): Promise<Record<string, unknown>> {
   const cached = client.latest(id) as Record<string, unknown> | undefined;
-  if (cached) return cached;
+  if (cached && typeof cached.state === "boolean") return cached;
 
   return new Promise<Record<string, unknown>>((resolve, reject) => {
     let subscription: any = null;
     const timeout = setTimeout(() => {
       try { subscription?.[Symbol.dispose]?.(); } catch { /* no-op */ }
-      reject(new Error(`Timed out waiting for ESPHome state after ${timeoutMs} ms`));
+      reject(new Error(`Timed out waiting for ESPHome boolean state after ${timeoutMs} ms`));
     }, timeoutMs);
     subscription = client.on("telemetry", () => {
       const state = client.latest(id) as Record<string, unknown> | undefined;
-      if (!state) return;
+      if (!state || typeof state.state !== "boolean") return;
       clearTimeout(timeout);
       try { subscription?.[Symbol.dispose]?.(); } catch { /* no-op */ }
       resolve(state);
+    });
+  });
+}
+
+async function waitForBooleanStates(client: any, ids: any[], timeoutMs: number): Promise<void> {
+  const pending = () => ids.some(id => typeof (client.latest(id) as Record<string, unknown> | undefined)?.state !== "boolean");
+  if (!pending()) return;
+
+  await new Promise<void>(resolve => {
+    let subscription: any = null;
+    const finish = () => {
+      clearTimeout(timeout);
+      try { subscription?.[Symbol.dispose]?.(); } catch { /* no-op */ }
+      resolve();
+    };
+    const timeout = setTimeout(finish, timeoutMs);
+    subscription = client.on("telemetry", () => {
+      if (!pending()) finish();
     });
   });
 }
@@ -304,24 +322,27 @@ export class EspHomeProvider implements Provider {
     try {
       if (command.action === "LIST_ENTITIES") {
         const available = client.getAvailableEntityIds();
-        const entities = [
-          ...(available.light ?? []).map(id => ({ type: "light", entityId: id })),
-          ...(available.switch ?? []).map(id => ({ type: "switch", entityId: id }))
-        ].map(item => {
+        const rawEntities = [
+          ...(available.light ?? []).map(id => ({ type: "light" as const, entityId: id })),
+          ...(available.switch ?? []).map(id => ({ type: "switch" as const, entityId: id }))
+        ];
+        await waitForBooleanStates(client as any, rawEntities.map(item => item.entityId), Math.min(this.requestTimeoutMs, 1500));
+        const entities = rawEntities.map(item => {
           const rawId = String(item.entityId);
           const value = `${item.type}:${rawId.replace(new RegExp(`^${item.type}-`), "")}`;
           const entity = client.getEntityById(item.entityId as Parameters<typeof client.getEntityById>[0]) as Record<string, unknown> | undefined;
+          const latest = client.latest(item.entityId as Parameters<typeof client.latest>[0]) as Record<string, unknown> | undefined;
           const name = typeof entity?.name === "string" && entity.name.trim() ? entity.name.trim() : value;
-          return { type: item.type, id: rawId, value, name, label: `${name} (${value})` };
+          return { type: item.type, id: rawId, value, name, label: `${name} (${value})`, power: asBoolean(latest?.state) };
         }).sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: "base" }));
         return { result: { entities } };
       }
 
-      const target = this.resolveTarget(client as any, identities, host);
+      const target = this.resolveTarget(client as any, identities, host, command.parameters?.entity);
       const id = entityId(target.entityType, target.entityObjectId) as any;
 
       if (command.action === "GET_STATE") {
-        const state = await waitForCachedState(client as any, id, this.requestTimeoutMs);
+        const state = await waitForBooleanState(client as any, id, this.requestTimeoutMs);
         const normalized = normalizeState(state, target);
         return { result: normalized, state: normalized };
       }
@@ -330,10 +351,8 @@ export class EspHomeProvider implements Provider {
       if (command.action === "POWER_ON") desired = true;
       else if (command.action === "POWER_OFF") desired = false;
       else if (command.action === "TOGGLE") {
-        const current = await waitForCachedState(client as any, id, this.requestTimeoutMs);
-        const power = asBoolean(current.state);
-        if (power == null) throw new Error("ESPHome entity did not report a boolean state");
-        desired = !power;
+        const current = await waitForBooleanState(client as any, id, this.requestTimeoutMs);
+        desired = !Boolean(current.state);
       } else {
         throw new Error(`Unsupported ESPHome action ${command.action}`);
       }
@@ -350,8 +369,8 @@ export class EspHomeProvider implements Provider {
     }
   }
 
-  private resolveTarget(client: any, identities: DeviceIdentity[], host: string): ResolvedTarget {
-    const explicit = identityValue(identities, "ESPHOME_ENTITY");
+  private resolveTarget(client: any, identities: DeviceIdentity[], host: string, commandEntity?: unknown): ResolvedTarget {
+    const explicit = textValue(commandEntity) || identityValue(identities, "ESPHOME_ENTITY");
     if (explicit) {
       const parsed = normalizeEntityIdentity(explicit);
       const id = entityId(parsed.entityType, parsed.objectId) as any;
