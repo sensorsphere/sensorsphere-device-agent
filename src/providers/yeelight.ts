@@ -43,6 +43,21 @@ function parseRgb(value: unknown): number {
 }
 
 
+function requireDiscoveredIp(target: Record<string, unknown>): string {
+  const value = target.ip;
+  if (typeof value !== "string" || !value.trim()) throw new Error("Discovered Yeelight target has no IP address");
+  return value.trim();
+}
+
+function requireName(parameters: Record<string, unknown>): string {
+  const value = parameters.name;
+  if (typeof value !== "string") throw new Error("name must be a string");
+  const name = value.trim();
+  if (!name) throw new Error("name must not be empty");
+  if (name.length > 64) throw new Error("name must not exceed 64 characters");
+  return name;
+}
+
 function parseDiscoveryResponse(message: string, remoteAddress: string): Record<string, unknown> {
   const headers: Record<string, string> = {};
   for (const line of message.split(/\r?\n/).slice(1)) {
@@ -145,6 +160,14 @@ export class YeelightProvider implements Provider {
         }
       });
     });
+  }
+
+  async executeDiscoveredAction(action: string, target: Record<string, unknown>, parameters: Record<string, unknown>): Promise<Record<string, unknown>> {
+    if (action !== "SET_NAME") throw new Error(`Unsupported Yeelight discovered-device action ${action}`);
+    const ip = requireDiscoveredIp(target);
+    const name = requireName(parameters);
+    await this.call(ip, "set_name", [name]);
+    return { ok: true, ip, name };
   }
 
   async execute(command: CommandMessage): Promise<ProviderCommandResult> {

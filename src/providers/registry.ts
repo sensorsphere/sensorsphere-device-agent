@@ -22,6 +22,13 @@ export class ProviderRegistry {
     return provider.discover(timeoutMs);
   }
 
+  async executeDiscoveredAction(providerName: string, action: string, target: Record<string, unknown>, parameters: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const provider = this.providers.get(providerName.toUpperCase());
+    if (!provider) throw new Error(`Unsupported provider ${providerName}`);
+    if (!provider.executeDiscoveredAction) throw new Error(`Provider ${provider.provider} does not support actions on discovered devices`);
+    return provider.executeDiscoveredAction(action, target, parameters);
+  }
+
   async execute(command: CommandMessage): Promise<ProviderCommandResult> {
     const provider = this.providers.get(command.provider.toUpperCase());
     if (!provider) throw new Error(`Unsupported provider ${command.provider}`);

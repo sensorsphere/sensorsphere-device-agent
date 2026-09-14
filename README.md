@@ -2,7 +2,7 @@
 
 Remote outbound-only agent used by SensorSphere to discover and control devices on networks that are not directly reachable from the SensorSphere server.
 
-Version: **1.0.5**
+Version: **1.0.6**
 
 ## Architecture
 
@@ -160,3 +160,8 @@ When the `YEELIGHT` provider is available, SensorSphere can ask the Device Agent
 The Device Agent must run on the same local network segment as the Yeelight devices for multicast discovery. Routed TCP connectivity to port `55443` is sufficient for control but does not make multicast discovery cross routers. The supplied Docker Compose file therefore uses `network_mode: host` so the container participates directly in the host network stack.
 
 Discovery requires Yeelight LAN Control to be enabled on the bulbs. No inbound SensorSphere port is opened on the Device Agent host.
+
+
+## Actions on discovered devices
+
+SensorSphere can execute provider-specific actions on devices found by discovery before import. Yeelight supports `SET_NAME`, which sends the LAN `set_name` command to the discovered IP.

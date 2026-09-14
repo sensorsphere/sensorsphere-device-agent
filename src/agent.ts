@@ -2,7 +2,7 @@ import os from "node:os";
 import WebSocket from "ws";
 import type { AgentConfig } from "./config.js";
 import type { Logger } from "./logger.js";
-import type { CommandMessage, DiscoverRequestMessage, ServerMessage } from "./protocol.js";
+import type { CommandMessage, DiscoveredDeviceActionRequestMessage, DiscoverRequestMessage, ServerMessage } from "./protocol.js";
 
 function isDiscoverRequestMessage(message: ServerMessage): message is DiscoverRequestMessage {
   return message.type === "DISCOVER_REQUEST"
@@ -10,6 +10,14 @@ function isDiscoverRequestMessage(message: ServerMessage): message is DiscoverRe
     && typeof message.commandId === "string"
     && "provider" in message
     && typeof message.provider === "string";
+}
+
+function isDiscoveredDeviceActionRequestMessage(message: ServerMessage): message is DiscoveredDeviceActionRequestMessage {
+  return message.type === "DISCOVERED_DEVICE_ACTION_REQUEST"
+    && "commandId" in message && typeof message.commandId === "string"
+    && "provider" in message && typeof message.provider === "string"
+    && "action" in message && typeof message.action === "string"
+    && "target" in message && typeof message.target === "object" && message.target !== null;
 }
 
 function isCommandMessage(message: ServerMessage): message is CommandMessage {
@@ -160,6 +168,11 @@ export class DeviceAgent {
       return;
     }
 
+    if (isDiscoveredDeviceActionRequestMessage(message)) {
+      await this.executeDiscoveredDeviceAction(message);
+      return;
+    }
+
     if (!isCommandMessage(message)) {
       this.logger.debug("Ignoring unsupported server message", { type: message.type });
       return;
@@ -206,6 +219,19 @@ export class DeviceAgent {
         provider: request.provider,
         error: message
       });
+    }
+  }
+
+  private async executeDiscoveredDeviceAction(request: DiscoveredDeviceActionRequestMessage): Promise<void> {
+    this.logger.info("Executing discovered device action", { command_id: request.commandId, provider: request.provider, action: request.action, target_ip: typeof request.target.ip === "string" ? request.target.ip : undefined });
+    try {
+      const result = await this.providers.executeDiscoveredAction(request.provider, request.action, request.target, request.parameters ?? {});
+      this.send({ type: "DISCOVERED_DEVICE_ACTION_RESULT", commandId: request.commandId, provider: request.provider, action: request.action, status: "SUCCESS", result });
+      this.logger.info("Discovered device action succeeded", { command_id: request.commandId, provider: request.provider, action: request.action });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.send({ type: "DISCOVERED_DEVICE_ACTION_RESULT", commandId: request.commandId, provider: request.provider, action: request.action, status: "FAILED", error: message });
+      this.logger.warn("Discovered device action failed", { command_id: request.commandId, provider: request.provider, action: request.action, error: message });
     }
   }
 

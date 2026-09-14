@@ -40,7 +40,16 @@ export interface DiscoverRequestMessage {
   timeoutMs?: number;
 }
 
-export type ServerMessage = CommandMessage | DiscoverRequestMessage | HelloAckMessage | HeartbeatAckMessage | {
+export interface DiscoveredDeviceActionRequestMessage {
+  type: "DISCOVERED_DEVICE_ACTION_REQUEST";
+  commandId: string;
+  provider: string;
+  action: string;
+  target: Record<string, unknown>;
+  parameters?: Record<string, unknown>;
+}
+
+export type ServerMessage = CommandMessage | DiscoverRequestMessage | DiscoveredDeviceActionRequestMessage | HelloAckMessage | HeartbeatAckMessage | {
   type: string;
   [key: string]: unknown;
 };
@@ -61,4 +70,5 @@ export interface Provider {
   readonly actions: string[];
   execute(command: CommandMessage): Promise<ProviderCommandResult>;
   discover?(timeoutMs: number): Promise<Array<Record<string, unknown>>>;
+  executeDiscoveredAction?(action: string, target: Record<string, unknown>, parameters: Record<string, unknown>): Promise<Record<string, unknown>>;
 }
