@@ -295,9 +295,9 @@ export class EspHomeProvider implements Provider {
 
   async execute(command: CommandMessage): Promise<ProviderCommandResult> {
     const identities = command.target?.identities ?? [];
-    const host = identityValue(identities, "FQDN")
-      ?? identityValue(identities, "HOSTNAME")
-      ?? identityValue(identities, "IP");
+    const host = identityValue(identities, "IP")
+      ?? identityValue(identities, "FQDN")
+      ?? identityValue(identities, "HOSTNAME");
     if (!host) throw new Error("ESPHome target requires an IP, FQDN or HOSTNAME identity");
 
     const client = await openEspHomeClient({ host, psk: this.noisePsk });

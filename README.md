@@ -2,7 +2,7 @@
 
 Remote outbound-only agent used by SensorSphere to discover and control devices on networks that are not directly reachable from the SensorSphere server.
 
-Version: **1.0.13**
+Version: **1.0.14**
 
 ## Architecture
 
@@ -194,3 +194,5 @@ For Native API encryption, configure `ESPHOME_NOISE_PSK` on the Device Agent. V1
 ESPHome discovery uses mDNS/DNS-SD `_esphomelib._tcp` advertisements on the local LAN. The Device Agent must therefore run with host networking and on a segment where ESPHome mDNS is visible. Discovery reports the node name, IP/hostname, API port, MAC address, board, ESPHome firmware version, and advertised light/switch entities when the Native API connection can be opened with the configured PSK.
 
 The discovery implementation queries mDNS directly with `multicast-dns` on every active non-loopback IPv4 interface and deduplicates responses. This avoids relying on higher-level Bonjour browsing behavior on multi-homed hosts and keeps discovery fully self-contained in Node.js.
+
+ESPHome Native API control prefers the registered `IP` identity over `FQDN`/`HOSTNAME` so `.local` names discovered by mDNS do not require resolver support inside the Device Agent container.
