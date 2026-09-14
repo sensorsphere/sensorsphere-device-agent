@@ -1,5 +1,6 @@
 import dgram from "node:dgram";
 import net from "node:net";
+import { readFileSync } from "node:fs";
 import type { CommandMessage, DeviceIdentity, Provider, ProviderCommandResult } from "../protocol.js";
 
 interface YeelightResponse {
@@ -42,6 +43,21 @@ function parseRgb(value: unknown): number {
   throw new Error("color must be a #RRGGBB string or integer 0..16777215");
 }
 
+
+function resolveMacFromArp(ip: string): string | null {
+  try {
+    const lines = readFileSync("/proc/net/arp", "utf8").split(/\r?\n/).slice(1);
+    for (const line of lines) {
+      const columns = line.trim().split(/\s+/);
+      if (columns.length < 4 || columns[0] !== ip) continue;
+      const mac = columns[3]!.toUpperCase();
+      if (/^(?:[0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(mac) && mac !== "00:00:00:00:00:00") return mac;
+    }
+  } catch {
+    // ARP metadata is best-effort; discovery remains valid without a MAC address.
+  }
+  return null;
+}
 
 function requireDiscoveredIp(target: Record<string, unknown>): string {
   const value = target.ip;
@@ -132,7 +148,10 @@ export class YeelightProvider implements Provider {
         for (const probeTimer of probeTimers) clearTimeout(probeTimer);
         try { socket.close(); } catch { /* already closed */ }
         if (error) reject(error);
-        else resolve([...devices.values()]);
+        else resolve([...devices.values()].map(device => {
+          const ip = typeof device.ip === "string" ? device.ip : "";
+          return { ...device, mac: ip ? resolveMacFromArp(ip) : null };
+        }));
       };
 
       const sendProbe = () => {
@@ -168,12 +187,12 @@ export class YeelightProvider implements Provider {
     if (action === "SET_NAME") {
       const name = requireName(parameters);
       await this.call(ip, "set_name", [name]);
-      return { ok: true, ip, name };
+      return { ...target, ...(await this.getState(ip)), ip, mac: target.mac ?? resolveMacFromArp(ip) };
     }
     if (action === "POWER_ON" || action === "POWER_OFF") {
       const power = action === "POWER_ON" ? "on" : "off";
       await this.call(ip, "set_power", [power, "smooth", 300]);
-      return { ok: true, ip, power: power === "on" };
+      return { ...target, ...(await this.getState(ip)), ip, mac: target.mac ?? resolveMacFromArp(ip) };
     }
     throw new Error(`Unsupported Yeelight discovered-device action ${action}`);
   }

@@ -2,7 +2,7 @@
 
 Remote outbound-only agent used by SensorSphere to discover and control devices on networks that are not directly reachable from the SensorSphere server.
 
-Version: **1.0.7**
+Version: **1.0.8**
 
 ## Architecture
 
@@ -169,3 +169,10 @@ SensorSphere can execute provider-specific actions on devices found by discovery
 ## Yeelight discovery actions
 
 Discovery results support `SET_NAME`, `POWER_ON`, and `POWER_OFF` so an operator can rename or visually identify a discovered bulb before importing it into Device Registry. Registered Yeelight devices also expose `SET_NAME` through Device Control.
+
+
+### Stable discovery identities
+
+Yeelight discovery reports the native Yeelight `id` and, when available in the local Linux ARP cache, the device MAC address. SensorSphere uses these stable identities to match discovery results with Device Registry entries; the DHCP-assigned IP address is not used as the registration key.
+
+Actions executed on a discovered Yeelight return the refreshed state of that bulb. SensorSphere can therefore update only the affected discovery row after `SET_NAME`, `POWER_ON`, or `POWER_OFF` without rerunning a full multicast scan.
