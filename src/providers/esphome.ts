@@ -199,7 +199,7 @@ async function waitForCachedState(client: any, id: any, timeoutMs: number): Prom
 
 export class EspHomeProvider implements Provider {
   readonly provider = "ESPHOME";
-  readonly actions = ["GET_STATE", "POWER_ON", "POWER_OFF", "TOGGLE"];
+  readonly actions = ["LIST_ENTITIES", "GET_STATE", "POWER_ON", "POWER_OFF", "TOGGLE"];
 
   constructor(
     private readonly requestTimeoutMs = 5000,
@@ -302,6 +302,21 @@ export class EspHomeProvider implements Provider {
 
     const client = await openEspHomeClient({ host, psk: this.noisePsk });
     try {
+      if (command.action === "LIST_ENTITIES") {
+        const available = client.getAvailableEntityIds();
+        const entities = [
+          ...(available.light ?? []).map(id => ({ type: "light", entityId: id })),
+          ...(available.switch ?? []).map(id => ({ type: "switch", entityId: id }))
+        ].map(item => {
+          const rawId = String(item.entityId);
+          const value = `${item.type}:${rawId.replace(new RegExp(`^${item.type}-`), "")}`;
+          const entity = client.getEntityById(item.entityId as Parameters<typeof client.getEntityById>[0]) as Record<string, unknown> | undefined;
+          const name = typeof entity?.name === "string" && entity.name.trim() ? entity.name.trim() : value;
+          return { type: item.type, id: rawId, value, name, label: `${name} (${value})` };
+        }).sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: "base" }));
+        return { result: { entities } };
+      }
+
       const target = this.resolveTarget(client as any, identities, host);
       const id = entityId(target.entityType, target.entityObjectId) as any;
 

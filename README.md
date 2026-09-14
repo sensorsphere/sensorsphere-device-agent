@@ -196,3 +196,5 @@ ESPHome discovery uses mDNS/DNS-SD `_esphomelib._tcp` advertisements on the loca
 The discovery implementation queries mDNS directly with `multicast-dns` on every active non-loopback IPv4 interface and deduplicates responses. This avoids relying on higher-level Bonjour browsing behavior on multi-homed hosts and keeps discovery fully self-contained in Node.js.
 
 ESPHome Native API control prefers the registered `IP` identity over `FQDN`/`HOSTNAME` so `.local` names discovered by mDNS do not require resolver support inside the Device Agent container.
+
+- ESPHome entity enumeration (`LIST_ENTITIES`) for interactive entity selection in SensorSphere Device Control.
