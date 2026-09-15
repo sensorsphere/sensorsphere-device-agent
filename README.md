@@ -205,3 +205,7 @@ ESPHome Native API control prefers the registered `IP` identity over `FQDN`/`HOS
 ESPHome devices assigned to this Device Agent are synchronized by SensorSphere over the existing agent WebSocket. The provider keeps a persistent Native API connection per registered ESPHome device, subscribes to light/switch telemetry, reconnects automatically, and publishes state changes back to SensorSphere as `DEVICE_STATE` messages.
 
 The realtime stream is the source of truth for entity state. Control commands no longer overwrite the aggregate realtime device state. Changes made outside SensorSphere, including from the ESPHome Web UI, are reflected through Native API telemetry.
+
+## ESPHome realtime entity model
+
+ESPHome realtime subscriptions now publish a generic entity model for light, switch, sensor, binary_sensor, text_sensor, number and select entities. Each entity carries its current value, unit when advertised, raw metadata, observation timestamp and whether SensorSphere currently exposes control actions for it.

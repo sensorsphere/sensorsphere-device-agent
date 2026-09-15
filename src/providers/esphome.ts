@@ -3,7 +3,17 @@ import { networkInterfaces } from "node:os";
 import { entityId, openEspHomeClient } from "esphome-client";
 import type { CommandMessage, DeviceIdentity, Provider, ProviderCommandResult, ProviderStateSink, SyncedDevice } from "../protocol.js";
 
-type EspHomeEntityType = "light" | "switch";
+type EspHomeEntityType = "light" | "switch" | "sensor" | "binary_sensor" | "text_sensor" | "number" | "select";
+
+const REALTIME_ENTITY_TYPES: EspHomeEntityType[] = [
+  "light",
+  "switch",
+  "sensor",
+  "binary_sensor",
+  "text_sensor",
+  "number",
+  "select"
+];
 
 type MdnsRecord = {
   name?: string;
@@ -134,7 +144,7 @@ function identityValue(identities: DeviceIdentity[], type: string): string | nul
   return match?.value?.trim() || null;
 }
 
-function normalizeEntityIdentity(value: string): { entityType: EspHomeEntityType; objectId: string } {
+function normalizeEntityIdentity(value: string): { entityType: "light" | "switch"; objectId: string } {
   const separator = value.indexOf(":");
   if (separator <= 0 || separator === value.length - 1) {
     throw new Error("ESPHOME_ENTITY must use light:<object_id> or switch:<object_id>");
@@ -147,19 +157,30 @@ function normalizeEntityIdentity(value: string): { entityType: EspHomeEntityType
   return { entityType, objectId };
 }
 
+export function decodeEspHomeEntityValue(
+  entityType: EspHomeEntityType,
+  state: Record<string, unknown> | null | undefined
+): boolean | number | string | null {
+  if (!state) return null;
+  const value = state.state;
+  if (typeof value === "boolean" || typeof value === "number" || typeof value === "string") return value;
+
+  // ESPHome API messages use proto3 scalar fields. Generated JavaScript can
+  // omit fields when their wire value is the scalar default, but the presence
+  // of the telemetry object itself still represents a current entity state.
+  if (entityType === "light" || entityType === "switch" || entityType === "binary_sensor") return false;
+  if (entityType === "sensor" || entityType === "number") return 0;
+  if (entityType === "text_sensor" || entityType === "select") return "";
+  return null;
+}
+
 export function decodeEspHomePower(
   entityType: EspHomeEntityType,
   state: Record<string, unknown> | null | undefined
 ): boolean | null {
-  if (!state) return null;
-  if (typeof state.state === "boolean") return state.state;
-
-  // ESPHome uses proto3 boolean fields for light/switch state. The generated
-  // JavaScript object can omit the field when the wire value is false. A
-  // received light/switch telemetry object without `state` therefore means OFF,
-  // not unknown.
-  if (entityType === "light" || entityType === "switch") return false;
-  return null;
+  if (entityType !== "light" && entityType !== "switch") return null;
+  const value = decodeEspHomeEntityValue(entityType, state);
+  return typeof value === "boolean" ? value : null;
 }
 
 function normalizeState(state: Record<string, unknown>, target: ResolvedTarget): Record<string, unknown> {
@@ -212,6 +233,10 @@ interface RealtimeEntityState {
   value: string;
   name: string;
   power: boolean | null;
+  currentValue: boolean | number | string | null;
+  unit: string | null;
+  metadata: Record<string, unknown>;
+  controllable: boolean;
   state: Record<string, unknown> | null;
   observedAt: string | null;
 }
@@ -238,6 +263,10 @@ function realtimeEntitySnapshot(entity: RealtimeEntityState): Record<string, unk
     name: entity.name,
     label: `${entity.name} (${entity.value})`,
     power: entity.power,
+    currentValue: entity.currentValue,
+    unit: entity.unit,
+    metadata: entity.metadata,
+    controllable: entity.controllable,
     state: entity.state,
     observedAt: entity.observedAt
   };
@@ -329,7 +358,7 @@ export class EspHomeProvider implements Provider {
         retryMs = 1000;
         this.initializeRealtimeEntities(subscription, client);
         this.emitRealtimeState(subscription, true);
-        console.info(`[ESPHOME] Realtime connected ${subscription.host}: ${subscription.entities.size} light/switch entity(ies)`);
+        console.info(`[ESPHOME] Realtime connected ${subscription.host}: ${subscription.entities.size} realtime entity(ies)`);
 
         const tasks = [...subscription.entities.values()].map(entity => this.consumeEntityTelemetry(subscription, client, entity));
         if (tasks.length === 0) {
@@ -356,23 +385,30 @@ export class EspHomeProvider implements Provider {
   }
 
   private initializeRealtimeEntities(subscription: RealtimeSubscription, client: any): void {
-    const available = client.getAvailableEntityIds();
-    const items = [
-      ...(available.light ?? []).map((id: any) => ({ type: "light" as const, id })),
-      ...(available.switch ?? []).map((id: any) => ({ type: "switch" as const, id }))
-    ];
+    const available = client.getAvailableEntityIds() as Record<string, unknown[]>;
+    const items = REALTIME_ENTITY_TYPES.flatMap(type =>
+      (available[type] ?? []).map(id => ({ type, id }))
+    );
     const next = new Map<string, RealtimeEntityState>();
     for (const item of items) {
       const rawId = String(item.id);
       const value = entityValue(item.type, rawId);
-      const metadata = client.getEntityById(item.id) as Record<string, unknown> | undefined;
+      const metadata = (client.getEntityById(item.id) as Record<string, unknown> | undefined) ?? {};
       const latest = client.latest(item.id) as Record<string, unknown> | undefined;
+      const currentValue = decodeEspHomeEntityValue(item.type, latest);
+      const unit = typeof metadata.unitOfMeasurement === "string" && metadata.unitOfMeasurement.trim()
+        ? metadata.unitOfMeasurement.trim()
+        : null;
       next.set(value, {
         type: item.type,
         id: rawId,
         value,
-        name: typeof metadata?.name === "string" && metadata.name.trim() ? metadata.name.trim() : value,
+        name: typeof metadata.name === "string" && metadata.name.trim() ? metadata.name.trim() : value,
         power: decodeEspHomePower(item.type, latest),
+        currentValue,
+        unit,
+        metadata,
+        controllable: item.type === "light" || item.type === "switch",
         state: latest ?? null,
         observedAt: latest ? new Date().toISOString() : null
       });
@@ -387,6 +423,7 @@ export class EspHomeProvider implements Provider {
         if (subscription.abort.signal.aborted) return;
         const state = event as Record<string, unknown>;
         entity.state = state;
+        entity.currentValue = decodeEspHomeEntityValue(entity.type, state);
         entity.power = decodeEspHomePower(entity.type, state);
         entity.observedAt = new Date().toISOString();
         this.emitRealtimeState(subscription, true);
