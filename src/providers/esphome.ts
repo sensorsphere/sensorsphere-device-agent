@@ -147,13 +147,24 @@ function normalizeEntityIdentity(value: string): { entityType: EspHomeEntityType
   return { entityType, objectId };
 }
 
-function asBoolean(value: unknown): boolean | null {
-  return typeof value === "boolean" ? value : null;
+export function decodeEspHomePower(
+  entityType: EspHomeEntityType,
+  state: Record<string, unknown> | null | undefined
+): boolean | null {
+  if (!state) return null;
+  if (typeof state.state === "boolean") return state.state;
+
+  // ESPHome uses proto3 boolean fields for light/switch state. The generated
+  // JavaScript object can omit the field when the wire value is false. A
+  // received light/switch telemetry object without `state` therefore means OFF,
+  // not unknown.
+  if (entityType === "light" || entityType === "switch") return false;
+  return null;
 }
 
 function normalizeState(state: Record<string, unknown>, target: ResolvedTarget): Record<string, unknown> {
   const result: Record<string, unknown> = {
-    power: asBoolean(state.state),
+    power: decodeEspHomePower(target.entityType, state),
     entityType: target.entityType,
     entityId: `${target.entityType}:${target.entityObjectId}`
   };
@@ -177,15 +188,15 @@ async function disposeClient(client: unknown): Promise<void> {
   if (typeof disconnect === "function") await (disconnect as () => Promise<void>).call(client);
 }
 
-async function waitForBooleanState(client: any, id: any, timeoutMs: number): Promise<Record<string, unknown> | null> {
+async function waitForBooleanState(client: any, id: any, entityType: EspHomeEntityType, timeoutMs: number): Promise<Record<string, unknown> | null> {
   const cached = client.latest(id) as Record<string, unknown> | undefined;
-  if (cached && typeof cached.state === "boolean") return cached;
+  if (cached && decodeEspHomePower(entityType, cached) !== null) return cached;
 
   const signal = AbortSignal.timeout(timeoutMs);
   try {
     for await (const event of client.telemetryForId(id, { signal })) {
       const state = event as Record<string, unknown>;
-      if (typeof state.state === "boolean") return state;
+      if (decodeEspHomePower(entityType, state) !== null) return state;
     }
   } catch (error) {
     if (signal.aborted) return null;
@@ -361,7 +372,7 @@ export class EspHomeProvider implements Provider {
         id: rawId,
         value,
         name: typeof metadata?.name === "string" && metadata.name.trim() ? metadata.name.trim() : value,
-        power: asBoolean(latest?.state),
+        power: decodeEspHomePower(item.type, latest),
         state: latest ?? null,
         observedAt: latest ? new Date().toISOString() : null
       });
@@ -376,7 +387,7 @@ export class EspHomeProvider implements Provider {
         if (subscription.abort.signal.aborted) return;
         const state = event as Record<string, unknown>;
         entity.state = state;
-        entity.power = asBoolean(state.state);
+        entity.power = decodeEspHomePower(entity.type, state);
         entity.observedAt = new Date().toISOString();
         this.emitRealtimeState(subscription, true);
       }
@@ -497,7 +508,7 @@ export class EspHomeProvider implements Provider {
           const entity = client.getEntityById(item.entityId as Parameters<typeof client.getEntityById>[0]) as Record<string, unknown> | undefined;
           const latest = client.latest(item.entityId as Parameters<typeof client.latest>[0]) as Record<string, unknown> | undefined;
           const name = typeof entity?.name === "string" && entity.name.trim() ? entity.name.trim() : value;
-          return { type: item.type, id: rawId, value, name, label: `${name} (${value})`, power: asBoolean(latest?.state) };
+          return { type: item.type, id: rawId, value, name, label: `${name} (${value})`, power: decodeEspHomePower(item.type, latest) };
         }).sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: "base" }));
         return { result: { entities } };
       }
@@ -506,7 +517,7 @@ export class EspHomeProvider implements Provider {
       const id = entityId(target.entityType, target.entityObjectId) as any;
 
       if (command.action === "GET_STATE") {
-        const state = await waitForBooleanState(client as any, id, Math.min(this.requestTimeoutMs, 1500));
+        const state = await waitForBooleanState(client as any, id, target.entityType, Math.min(this.requestTimeoutMs, 1500));
         const normalized = state
           ? normalizeState(state, target)
           : { power: null, entityType: target.entityType, entityId: `${target.entityType}:${target.entityObjectId}` };
@@ -517,11 +528,11 @@ export class EspHomeProvider implements Provider {
       if (command.action === "POWER_ON") desired = true;
       else if (command.action === "POWER_OFF") desired = false;
       else if (command.action === "TOGGLE") {
-        const current = await waitForBooleanState(client as any, id, Math.min(this.requestTimeoutMs, 1500));
+        const current = await waitForBooleanState(client as any, id, target.entityType, Math.min(this.requestTimeoutMs, 1500));
         if (!current) {
           throw new Error("ESPHome entity state is unknown; use POWER_ON or POWER_OFF before TOGGLE");
         }
-        desired = !current.state;
+        desired = !decodeEspHomePower(target.entityType, current);
       } else {
         throw new Error(`Unsupported ESPHome action ${command.action}`);
       }

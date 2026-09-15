@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { EspHomeProvider } from "../providers/esphome.js";
+import { decodeEspHomePower, EspHomeProvider } from "../providers/esphome.js";
 
 test("EspHomeProvider advertises initial V1 actions", () => {
   const provider = new EspHomeProvider();
@@ -9,4 +9,13 @@ test("EspHomeProvider advertises initial V1 actions", () => {
   assert.equal(typeof provider.discover, "function");
   assert.equal(typeof provider.syncDevices, "function");
   assert.equal(typeof provider.stop, "function");
+});
+
+
+test("decodeEspHomePower preserves proto3 false semantics for switch/light telemetry", () => {
+  assert.equal(decodeEspHomePower("switch", { type: "switch", state: true }), true);
+  assert.equal(decodeEspHomePower("switch", { type: "switch" }), false);
+  assert.equal(decodeEspHomePower("light", { type: "light", state: true }), true);
+  assert.equal(decodeEspHomePower("light", { type: "light" }), false);
+  assert.equal(decodeEspHomePower("switch", undefined), null);
 });
