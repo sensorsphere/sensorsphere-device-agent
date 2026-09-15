@@ -177,42 +177,21 @@ async function disposeClient(client: unknown): Promise<void> {
   if (typeof disconnect === "function") await (disconnect as () => Promise<void>).call(client);
 }
 
-async function waitForBooleanState(client: any, id: any, timeoutMs: number): Promise<Record<string, unknown>> {
+async function waitForBooleanState(client: any, id: any, timeoutMs: number): Promise<Record<string, unknown> | null> {
   const cached = client.latest(id) as Record<string, unknown> | undefined;
   if (cached && typeof cached.state === "boolean") return cached;
 
-  return new Promise<Record<string, unknown>>((resolve, reject) => {
-    let subscription: any = null;
-    const timeout = setTimeout(() => {
-      try { subscription?.[Symbol.dispose]?.(); } catch { /* no-op */ }
-      reject(new Error(`Timed out waiting for ESPHome boolean state after ${timeoutMs} ms`));
-    }, timeoutMs);
-    subscription = client.on("telemetry", () => {
-      const state = client.latest(id) as Record<string, unknown> | undefined;
-      if (!state || typeof state.state !== "boolean") return;
-      clearTimeout(timeout);
-      try { subscription?.[Symbol.dispose]?.(); } catch { /* no-op */ }
-      resolve(state);
-    });
-  });
-}
-
-async function waitForBooleanStates(client: any, ids: any[], timeoutMs: number): Promise<void> {
-  const pending = () => ids.some(id => typeof (client.latest(id) as Record<string, unknown> | undefined)?.state !== "boolean");
-  if (!pending()) return;
-
-  await new Promise<void>(resolve => {
-    let subscription: any = null;
-    const finish = () => {
-      clearTimeout(timeout);
-      try { subscription?.[Symbol.dispose]?.(); } catch { /* no-op */ }
-      resolve();
-    };
-    const timeout = setTimeout(finish, timeoutMs);
-    subscription = client.on("telemetry", () => {
-      if (!pending()) finish();
-    });
-  });
+  const signal = AbortSignal.timeout(timeoutMs);
+  try {
+    for await (const event of client.telemetryForId(id, { signal })) {
+      const state = event as Record<string, unknown>;
+      if (typeof state.state === "boolean") return state;
+    }
+  } catch (error) {
+    if (signal.aborted) return null;
+    throw error;
+  }
+  return null;
 }
 
 export class EspHomeProvider implements Provider {
@@ -326,7 +305,6 @@ export class EspHomeProvider implements Provider {
           ...(available.light ?? []).map(id => ({ type: "light" as const, entityId: id })),
           ...(available.switch ?? []).map(id => ({ type: "switch" as const, entityId: id }))
         ];
-        await waitForBooleanStates(client as any, rawEntities.map(item => item.entityId), Math.min(this.requestTimeoutMs, 1500));
         const entities = rawEntities.map(item => {
           const rawId = String(item.entityId);
           const value = `${item.type}:${rawId.replace(new RegExp(`^${item.type}-`), "")}`;
@@ -342,8 +320,10 @@ export class EspHomeProvider implements Provider {
       const id = entityId(target.entityType, target.entityObjectId) as any;
 
       if (command.action === "GET_STATE") {
-        const state = await waitForBooleanState(client as any, id, this.requestTimeoutMs);
-        const normalized = normalizeState(state, target);
+        const state = await waitForBooleanState(client as any, id, Math.min(this.requestTimeoutMs, 1500));
+        const normalized = state
+          ? normalizeState(state, target)
+          : { power: null, entityType: target.entityType, entityId: `${target.entityType}:${target.entityObjectId}` };
         return { result: normalized, state: normalized };
       }
 
@@ -351,8 +331,11 @@ export class EspHomeProvider implements Provider {
       if (command.action === "POWER_ON") desired = true;
       else if (command.action === "POWER_OFF") desired = false;
       else if (command.action === "TOGGLE") {
-        const current = await waitForBooleanState(client as any, id, this.requestTimeoutMs);
-        desired = !Boolean(current.state);
+        const current = await waitForBooleanState(client as any, id, Math.min(this.requestTimeoutMs, 1500));
+        if (!current) {
+          throw new Error("ESPHome entity state is unknown; use POWER_ON or POWER_OFF before TOGGLE");
+        }
+        desired = !current.state;
       } else {
         throw new Error(`Unsupported ESPHome action ${command.action}`);
       }

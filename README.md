@@ -197,4 +197,4 @@ The discovery implementation queries mDNS directly with `multicast-dns` on every
 
 ESPHome Native API control prefers the registered `IP` identity over `FQDN`/`HOSTNAME` so `.local` names discovered by mDNS do not require resolver support inside the Device Agent container.
 
-- ESPHome entity enumeration (`LIST_ENTITIES`) reports each controllable light/switch and its latest boolean power state when available. Device Control can address any listed entity per command while `ESPHOME_ENTITY` remains the persisted default.
+- ESPHome entity enumeration (`LIST_ENTITIES`) reports each controllable light/switch and its latest boolean power state when available without failing when an initial state has not yet arrived. Device Control can address any listed entity per command while `ESPHOME_ENTITY` remains the persisted default. `POWER_ON`/`POWER_OFF` use the command acknowledgement to establish state; `TOGGLE` requires a known boolean state.
