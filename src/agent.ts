@@ -44,6 +44,7 @@ export class DeviceAgent {
   private socket: WebSocket | null = null;
   private stopped = false;
   private heartbeatTimer: NodeJS.Timeout | null = null;
+  private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectDelayMs: number;
 
   constructor(
@@ -70,6 +71,7 @@ export class DeviceAgent {
   stop(): void {
     this.stopped = true;
     this.clearHeartbeat();
+    this.clearReconnect();
     void this.providers.stop().catch(error => {
       this.logger.warn("Failed to stop provider subscriptions", { error: error instanceof Error ? error.message : String(error) });
     });
@@ -93,6 +95,7 @@ export class DeviceAgent {
     this.socket = socket;
 
     socket.on("open", () => {
+      this.clearReconnect();
       this.reconnectDelayMs = this.config.reconnectInitialMs;
       this.logger.info("Connected to SensorSphere Device Control WebSocket");
       this.send({
@@ -119,10 +122,25 @@ export class DeviceAgent {
         status_code: response.statusCode,
         status_message: response.statusMessage
       });
+      if (this.socket === socket) this.socket = null;
+      try {
+        response.resume();
+      } catch {
+        // Ignore response cleanup errors; reconnect scheduling is the important path.
+      }
+      try {
+        socket.terminate();
+      } catch {
+        // The socket may already be closed by ws after a failed handshake.
+      }
+      this.scheduleReconnect();
     });
 
     socket.on("error", error => {
       this.logger.warn("Device Control WebSocket error", { error: error.message });
+      if (socket.readyState !== WebSocket.OPEN) {
+        this.scheduleReconnect();
+      }
     });
 
     socket.on("close", (code, reason) => {
@@ -137,11 +155,19 @@ export class DeviceAgent {
   }
 
   private scheduleReconnect(): void {
-    if (this.stopped) return;
+    if (this.stopped || this.reconnectTimer) return;
     const delay = this.reconnectDelayMs;
     this.reconnectDelayMs = Math.min(this.reconnectDelayMs * 2, this.config.reconnectMaxMs);
     this.logger.info("Scheduling Device Control WebSocket reconnect", { delay_ms: delay });
-    setTimeout(() => this.connect(), delay);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connect();
+    }, delay);
+  }
+
+  private clearReconnect(): void {
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
   }
 
   private clearHeartbeat(): void {

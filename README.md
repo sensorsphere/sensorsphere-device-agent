@@ -209,3 +209,7 @@ The realtime stream is the source of truth for entity state. Control commands no
 ## ESPHome realtime entity model
 
 ESPHome realtime subscriptions now publish a generic entity model for light, switch, sensor, binary_sensor, text_sensor, number and select entities. Each entity carries its current value, unit when advertised, raw metadata, observation timestamp and whether SensorSphere currently exposes control actions for it.
+
+### 1.0.21
+
+- Device Control WebSocket reconnects after failed HTTP handshakes (including transient 502/503 responses), network errors, and abnormal closes using a single exponential-backoff timer.
