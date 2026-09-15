@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import { networkInterfaces } from "node:os";
 import { entityId, openEspHomeClient } from "esphome-client";
-import type { CommandMessage, DeviceIdentity, Provider, ProviderCommandResult } from "../protocol.js";
+import type { CommandMessage, DeviceIdentity, Provider, ProviderCommandResult, ProviderStateSink, SyncedDevice } from "../protocol.js";
 
 type EspHomeEntityType = "light" | "switch";
 
@@ -194,14 +194,197 @@ async function waitForBooleanState(client: any, id: any, timeoutMs: number): Pro
   return null;
 }
 
+
+interface RealtimeEntityState {
+  type: EspHomeEntityType;
+  id: string;
+  value: string;
+  name: string;
+  power: boolean | null;
+  state: Record<string, unknown> | null;
+  observedAt: string | null;
+}
+
+interface RealtimeSubscription {
+  device: SyncedDevice;
+  host: string;
+  abort: AbortController;
+  client: any | null;
+  entities: Map<string, RealtimeEntityState>;
+  task: Promise<void>;
+}
+
+function entityValue(type: EspHomeEntityType, rawId: unknown): string {
+  const id = String(rawId);
+  return `${type}:${id.replace(new RegExp(`^${type}-`), "")}`;
+}
+
+function realtimeEntitySnapshot(entity: RealtimeEntityState): Record<string, unknown> {
+  return {
+    type: entity.type,
+    id: entity.id,
+    value: entity.value,
+    name: entity.name,
+    label: `${entity.name} (${entity.value})`,
+    power: entity.power,
+    state: entity.state,
+    observedAt: entity.observedAt
+  };
+}
+
 export class EspHomeProvider implements Provider {
   readonly provider = "ESPHOME";
   readonly actions = ["LIST_ENTITIES", "GET_STATE", "POWER_ON", "POWER_OFF", "TOGGLE"];
+  private readonly subscriptions = new Map<string, RealtimeSubscription>();
+  private stateSink: ProviderStateSink | null = null;
 
   constructor(
     private readonly requestTimeoutMs = 5000,
     private readonly noisePsk: string | null = null
   ) {}
+
+  async syncDevices(devices: SyncedDevice[], onState: ProviderStateSink): Promise<void> {
+    this.stateSink = onState;
+    const wanted = new Map(devices.map(device => [device.deviceId, device]));
+
+    for (const [deviceId, subscription] of this.subscriptions) {
+      const next = wanted.get(deviceId);
+      const nextHost = next ? this.hostForDevice(next) : null;
+      if (!next || !nextHost || nextHost !== subscription.host) {
+        subscription.abort.abort();
+        this.subscriptions.delete(deviceId);
+      }
+    }
+
+    for (const device of devices) {
+      const existing = this.subscriptions.get(device.deviceId);
+      if (existing) {
+        existing.device = device;
+        this.emitRealtimeState(existing, existing.client != null);
+        continue;
+      }
+      const host = this.hostForDevice(device);
+      if (!host) {
+        console.warn(`[ESPHOME] Realtime subscription skipped for ${device.deviceName ?? device.deviceId}: no IP/FQDN/HOSTNAME identity`);
+        continue;
+      }
+      const abort = new AbortController();
+      const subscription: RealtimeSubscription = {
+        device,
+        host,
+        abort,
+        client: null,
+        entities: new Map(),
+        task: Promise.resolve()
+      };
+      subscription.task = this.runRealtimeSubscription(subscription);
+      this.subscriptions.set(device.deviceId, subscription);
+    }
+  }
+
+  async stop(): Promise<void> {
+    const subscriptions = [...this.subscriptions.values()];
+    this.subscriptions.clear();
+    for (const subscription of subscriptions) subscription.abort.abort();
+    await Promise.allSettled(subscriptions.map(subscription => subscription.task));
+  }
+
+  private hostForDevice(device: SyncedDevice): string | null {
+    return identityValue(device.identities, "IP")
+      ?? identityValue(device.identities, "FQDN")
+      ?? identityValue(device.identities, "HOSTNAME");
+  }
+
+  private emitRealtimeState(subscription: RealtimeSubscription, connected: boolean, error: string | null = null): void {
+    this.stateSink?.(subscription.device.deviceId, this.provider, {
+      realtime: true,
+      connected,
+      host: subscription.host,
+      error,
+      entities: [...subscription.entities.values()]
+        .map(realtimeEntitySnapshot)
+        .sort((left, right) => String(left.label).localeCompare(String(right.label), undefined, { sensitivity: "base" }))
+    });
+  }
+
+  private async runRealtimeSubscription(subscription: RealtimeSubscription): Promise<void> {
+    let retryMs = 1000;
+    while (!subscription.abort.signal.aborted) {
+      let client: any = null;
+      try {
+        console.info(`[ESPHOME] Realtime connecting ${subscription.device.deviceName ?? subscription.device.deviceId} at ${subscription.host}:6053`);
+        client = await openEspHomeClient({ host: subscription.host, psk: this.noisePsk });
+        subscription.client = client;
+        retryMs = 1000;
+        this.initializeRealtimeEntities(subscription, client);
+        this.emitRealtimeState(subscription, true);
+        console.info(`[ESPHOME] Realtime connected ${subscription.host}: ${subscription.entities.size} light/switch entity(ies)`);
+
+        const tasks = [...subscription.entities.values()].map(entity => this.consumeEntityTelemetry(subscription, client, entity));
+        if (tasks.length === 0) {
+          await new Promise<void>(resolve => subscription.abort.signal.addEventListener("abort", () => resolve(), { once: true }));
+        } else {
+          await Promise.race(tasks);
+        }
+        if (!subscription.abort.signal.aborted) throw new Error("ESPHome realtime telemetry stream ended");
+      } catch (error) {
+        if (subscription.abort.signal.aborted) break;
+        const message = error instanceof Error ? error.message : String(error);
+        subscription.client = null;
+        this.emitRealtimeState(subscription, false, message);
+        console.warn(`[ESPHOME] Realtime connection ${subscription.host} failed: ${message}; retry in ${retryMs}ms`);
+        await new Promise(resolve => setTimeout(resolve, retryMs));
+        retryMs = Math.min(retryMs * 2, 30000);
+      } finally {
+        subscription.client = null;
+        if (client) {
+          try { await disposeClient(client); } catch { /* no-op */ }
+        }
+      }
+    }
+  }
+
+  private initializeRealtimeEntities(subscription: RealtimeSubscription, client: any): void {
+    const available = client.getAvailableEntityIds();
+    const items = [
+      ...(available.light ?? []).map((id: any) => ({ type: "light" as const, id })),
+      ...(available.switch ?? []).map((id: any) => ({ type: "switch" as const, id }))
+    ];
+    const next = new Map<string, RealtimeEntityState>();
+    for (const item of items) {
+      const rawId = String(item.id);
+      const value = entityValue(item.type, rawId);
+      const metadata = client.getEntityById(item.id) as Record<string, unknown> | undefined;
+      const latest = client.latest(item.id) as Record<string, unknown> | undefined;
+      next.set(value, {
+        type: item.type,
+        id: rawId,
+        value,
+        name: typeof metadata?.name === "string" && metadata.name.trim() ? metadata.name.trim() : value,
+        power: asBoolean(latest?.state),
+        state: latest ?? null,
+        observedAt: latest ? new Date().toISOString() : null
+      });
+    }
+    subscription.entities = next;
+  }
+
+  private async consumeEntityTelemetry(subscription: RealtimeSubscription, client: any, entity: RealtimeEntityState): Promise<void> {
+    const id = entity.id as any;
+    try {
+      for await (const event of client.telemetryForId(id, { signal: subscription.abort.signal })) {
+        if (subscription.abort.signal.aborted) return;
+        const state = event as Record<string, unknown>;
+        entity.state = state;
+        entity.power = asBoolean(state.state);
+        entity.observedAt = new Date().toISOString();
+        this.emitRealtimeState(subscription, true);
+      }
+    } catch (error) {
+      if (subscription.abort.signal.aborted) return;
+      throw error;
+    }
+  }
 
   async discover(timeoutMs: number): Promise<Array<Record<string, unknown>>> {
     const interfaces = activeIpv4Addresses();
@@ -297,13 +480,16 @@ export class EspHomeProvider implements Provider {
       ?? identityValue(identities, "HOSTNAME");
     if (!host) throw new Error("ESPHome target requires an IP, FQDN or HOSTNAME identity");
 
-    const client = await openEspHomeClient({ host, psk: this.noisePsk });
+    const subscription = this.subscriptions.get(command.deviceId);
+    const persistentClient = subscription?.host === host ? subscription.client : null;
+    const client = persistentClient ?? await openEspHomeClient({ host, psk: this.noisePsk });
+    const temporaryClient = !persistentClient;
     try {
       if (command.action === "LIST_ENTITIES") {
         const available = client.getAvailableEntityIds();
         const rawEntities = [
-          ...(available.light ?? []).map(id => ({ type: "light" as const, entityId: id })),
-          ...(available.switch ?? []).map(id => ({ type: "switch" as const, entityId: id }))
+          ...(available.light ?? []).map((id: Parameters<typeof client.getEntityById>[0]) => ({ type: "light" as const, entityId: id })),
+          ...(available.switch ?? []).map((id: Parameters<typeof client.getEntityById>[0]) => ({ type: "switch" as const, entityId: id }))
         ];
         const entities = rawEntities.map(item => {
           const rawId = String(item.entityId);
@@ -324,7 +510,7 @@ export class EspHomeProvider implements Provider {
         const normalized = state
           ? normalizeState(state, target)
           : { power: null, entityType: target.entityType, entityId: `${target.entityType}:${target.entityObjectId}` };
-        return { result: normalized, state: normalized };
+        return { result: normalized };
       }
 
       let desired: boolean;
@@ -346,9 +532,9 @@ export class EspHomeProvider implements Provider {
         { timeoutMs: this.requestTimeoutMs }
       ) as Record<string, unknown>;
       const normalized = normalizeState(event, target);
-      return { result: normalized, state: normalized };
+      return { result: normalized };
     } finally {
-      await disposeClient(client);
+      if (temporaryClient) await disposeClient(client);
     }
   }
 

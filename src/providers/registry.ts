@@ -1,4 +1,4 @@
-import type { CommandMessage, Provider, ProviderCapability, ProviderCommandResult } from "../protocol.js";
+import type { CommandMessage, Provider, ProviderCapability, ProviderCommandResult, ProviderStateSink, SyncedDevice } from "../protocol.js";
 
 export class ProviderRegistry {
   private readonly providers = new Map<string, Provider>();
@@ -27,6 +27,19 @@ export class ProviderRegistry {
     if (!provider) throw new Error(`Unsupported provider ${providerName}`);
     if (!provider.executeDiscoveredAction) throw new Error(`Provider ${provider.provider} does not support actions on discovered devices`);
     return provider.executeDiscoveredAction(action, target, parameters);
+  }
+
+  async syncDevices(providerName: string, devices: SyncedDevice[], onState: ProviderStateSink): Promise<void> {
+    const provider = this.providers.get(providerName.toUpperCase());
+    if (!provider) throw new Error(`Unsupported provider ${providerName}`);
+    if (!provider.syncDevices) return;
+    await provider.syncDevices(devices, onState);
+  }
+
+  async stop(): Promise<void> {
+    await Promise.all([...this.providers.values()].map(async provider => {
+      if (provider.stop) await provider.stop();
+    }));
   }
 
   async execute(command: CommandMessage): Promise<ProviderCommandResult> {

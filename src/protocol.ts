@@ -33,6 +33,19 @@ export interface HeartbeatAckMessage {
   serverTime: string;
 }
 
+export interface SyncedDevice {
+  deviceId: string;
+  deviceName?: string;
+  provider: string;
+  identities: DeviceIdentity[];
+}
+
+export interface SyncDevicesMessage {
+  type: "SYNC_DEVICES";
+  provider: string;
+  devices: SyncedDevice[];
+}
+
 export interface DiscoverRequestMessage {
   type: "DISCOVER_REQUEST";
   commandId: string;
@@ -49,7 +62,7 @@ export interface DiscoveredDeviceActionRequestMessage {
   parameters?: Record<string, unknown>;
 }
 
-export type ServerMessage = CommandMessage | DiscoverRequestMessage | DiscoveredDeviceActionRequestMessage | HelloAckMessage | HeartbeatAckMessage | {
+export type ServerMessage = CommandMessage | DiscoverRequestMessage | DiscoveredDeviceActionRequestMessage | HelloAckMessage | HeartbeatAckMessage | SyncDevicesMessage | {
   type: string;
   [key: string]: unknown;
 };
@@ -65,10 +78,14 @@ export interface ProviderCommandResult {
   state?: Record<string, unknown>;
 }
 
+export type ProviderStateSink = (deviceId: string, provider: string, state: Record<string, unknown>) => void;
+
 export interface Provider {
   readonly provider: string;
   readonly actions: string[];
   execute(command: CommandMessage): Promise<ProviderCommandResult>;
+  syncDevices?(devices: SyncedDevice[], onState: ProviderStateSink): Promise<void>;
+  stop?(): Promise<void> | void;
   discover?(timeoutMs: number): Promise<Array<Record<string, unknown>>>;
   executeDiscoveredAction?(action: string, target: Record<string, unknown>, parameters: Record<string, unknown>): Promise<Record<string, unknown>>;
 }

@@ -198,3 +198,10 @@ The discovery implementation queries mDNS directly with `multicast-dns` on every
 ESPHome Native API control prefers the registered `IP` identity over `FQDN`/`HOSTNAME` so `.local` names discovered by mDNS do not require resolver support inside the Device Agent container.
 
 - ESPHome entity enumeration (`LIST_ENTITIES`) reports each controllable light/switch and its latest boolean power state when available without failing when an initial state has not yet arrived. Device Control can address any listed entity per command while `ESPHOME_ENTITY` remains the persisted default. `POWER_ON`/`POWER_OFF` use the command acknowledgement to establish state; `TOGGLE` requires a known boolean state.
+
+
+### ESPHome realtime state foundation
+
+ESPHome devices assigned to this Device Agent are synchronized by SensorSphere over the existing agent WebSocket. The provider keeps a persistent Native API connection per registered ESPHome device, subscribes to light/switch telemetry, reconnects automatically, and publishes state changes back to SensorSphere as `DEVICE_STATE` messages.
+
+The realtime stream is the source of truth for entity state. Control commands no longer overwrite the aggregate realtime device state. Changes made outside SensorSphere, including from the ESPHome Web UI, are reflected through Native API telemetry.

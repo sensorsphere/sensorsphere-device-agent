@@ -7,4 +7,6 @@ test("EspHomeProvider advertises initial V1 actions", () => {
   assert.equal(provider.provider, "ESPHOME");
   assert.deepEqual(provider.actions, ["LIST_ENTITIES", "GET_STATE", "POWER_ON", "POWER_OFF", "TOGGLE"]);
   assert.equal(typeof provider.discover, "function");
+  assert.equal(typeof provider.syncDevices, "function");
+  assert.equal(typeof provider.stop, "function");
 });

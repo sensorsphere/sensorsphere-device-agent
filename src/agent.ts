@@ -2,7 +2,7 @@ import os from "node:os";
 import WebSocket from "ws";
 import type { AgentConfig } from "./config.js";
 import type { Logger } from "./logger.js";
-import type { CommandMessage, DiscoveredDeviceActionRequestMessage, DiscoverRequestMessage, ServerMessage } from "./protocol.js";
+import type { CommandMessage, DiscoveredDeviceActionRequestMessage, DiscoverRequestMessage, ServerMessage, SyncDevicesMessage } from "./protocol.js";
 
 function isDiscoverRequestMessage(message: ServerMessage): message is DiscoverRequestMessage {
   return message.type === "DISCOVER_REQUEST"
@@ -18,6 +18,12 @@ function isDiscoveredDeviceActionRequestMessage(message: ServerMessage): message
     && "provider" in message && typeof message.provider === "string"
     && "action" in message && typeof message.action === "string"
     && "target" in message && typeof message.target === "object" && message.target !== null;
+}
+
+function isSyncDevicesMessage(message: ServerMessage): message is SyncDevicesMessage {
+  return message.type === "SYNC_DEVICES"
+    && "provider" in message && typeof message.provider === "string"
+    && "devices" in message && Array.isArray(message.devices);
 }
 
 function isCommandMessage(message: ServerMessage): message is CommandMessage {
@@ -64,6 +70,9 @@ export class DeviceAgent {
   stop(): void {
     this.stopped = true;
     this.clearHeartbeat();
+    void this.providers.stop().catch(error => {
+      this.logger.warn("Failed to stop provider subscriptions", { error: error instanceof Error ? error.message : String(error) });
+    });
     this.socket?.close(1000, "Agent stopping");
     this.socket = null;
   }
@@ -162,6 +171,14 @@ export class DeviceAgent {
     }
 
     if (message.type === "HEARTBEAT_ACK") return;
+
+    if (isSyncDevicesMessage(message)) {
+      await this.providers.syncDevices(message.provider, message.devices, (deviceId, provider, state) => {
+        this.send({ type: "DEVICE_STATE", deviceId, provider, state });
+      });
+      this.logger.info("Synchronized realtime provider devices", { provider: message.provider, devices: message.devices.length });
+      return;
+    }
 
     if (isDiscoverRequestMessage(message)) {
       await this.executeDiscovery(message);
