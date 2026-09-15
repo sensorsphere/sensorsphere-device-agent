@@ -39,6 +39,7 @@ function isCommandMessage(message: ServerMessage): message is CommandMessage {
 }
 import type { ProviderRegistry } from "./providers/registry.js";
 import { VERSION } from "./version.js";
+import { getSystemInfo } from "./system-info.js";
 
 export class DeviceAgent {
   private socket: WebSocket | null = null;
@@ -98,11 +99,13 @@ export class DeviceAgent {
       this.clearReconnect();
       this.reconnectDelayMs = this.config.reconnectInitialMs;
       this.logger.info("Connected to SensorSphere Device Control WebSocket");
+      const systemInfo = getSystemInfo();
       this.send({
         type: "HELLO",
         agentName: this.config.agentName,
         version: VERSION,
         hostname: os.hostname(),
+        systemInfo,
         agentLabels: this.config.agentLabels,
         capabilities: this.providers.capabilities()
       });

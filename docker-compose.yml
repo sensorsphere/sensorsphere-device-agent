@@ -21,3 +21,4 @@ services:
       ESPHOME_NOISE_PSK: "${ESPHOME_NOISE_PSK:-}"
     volumes:
       - ${DATA_DIR:-./data}:/app/data
+      - /etc/os-release:/host/etc/os-release:ro

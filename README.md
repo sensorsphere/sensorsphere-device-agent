@@ -213,3 +213,8 @@ ESPHome realtime subscriptions now publish a generic entity model for light, swi
 ### 1.0.21
 
 - Device Control WebSocket reconnects after failed HTTP handshakes (including transient 502/503 responses), network errors, and abnormal closes using a single exponential-backoff timer.
+
+
+## Host system information
+
+The agent reports the host operating system, OS version and processor architecture to SensorSphere. Docker Compose mounts `/etc/os-release` read-only at `/host/etc/os-release` so the reported OS is the host OS rather than the container image.
