@@ -7,6 +7,10 @@ VERSION="${VERSION:-latest}"
 INSTALL_DIR="${INSTALL_DIR:-${HOME}/sensorsphere-device-agent}"
 IMAGE="${DEVICE_AGENT_IMAGE:-ghcr.io/sensorsphere/sensorsphere-device-agent}"
 
+if [[ "$INSTALL_DIR" != /* ]]; then
+  INSTALL_DIR="$(pwd -P)/$INSTALL_DIR"
+fi
+
 fail() {
   printf 'ERROR: %s\n' "$*" >&2
   exit 1
@@ -50,11 +54,27 @@ ensure_install_dir
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
-printf 'Installing SensorSphere Device Agent\n'
-printf '  version:      %s\n' "$VERSION"
-printf '  source ref:   %s\n' "$SOURCE_REF"
-printf '  install dir:  %s\n' "$INSTALL_DIR"
-printf '  image:        %s:%s\n' "$IMAGE" "$IMAGE_TAG"
+if [[ "$PREEXISTING_INSTALL" == "true" ]]; then
+  ACTION="Updating"
+else
+  ACTION="Installing"
+fi
+
+CURRENT_IMAGE=""
+CURRENT_VERSION="not installed"
+if [[ -f "$INSTALL_DIR/.env" ]]; then
+  CURRENT_IMAGE="$(sed -n 's/^DEVICE_AGENT_IMAGE=//p' "$INSTALL_DIR/.env" | tail -1)"
+  if [[ -n "$CURRENT_IMAGE" ]]; then
+    CURRENT_VERSION="${CURRENT_IMAGE##*:}"
+  fi
+fi
+
+printf '%s SensorSphere Device Agent\n' "$ACTION"
+printf '  current version: %s\n' "$CURRENT_VERSION"
+printf '  target version:  %s\n' "$VERSION"
+printf '  source ref:      %s\n' "$SOURCE_REF"
+printf '  install dir:     %s\n' "$INSTALL_DIR"
+printf '  image:           %s:%s\n' "$IMAGE" "$IMAGE_TAG"
 
 curl -fsSL \
   "${RAW_BASE_URL}/${REPOSITORY}/${SOURCE_REF}/docker-compose.yml" \
@@ -155,12 +175,16 @@ if [[ "$CONFIGURED" == "true" ]]; then
     cd "$INSTALL_DIR"
     docker compose --env-file .env pull
     docker compose --env-file .env up -d
+    if [[ -z "$(docker compose --env-file .env ps --status running -q device-agent)" ]]; then
+      fail "Device Agent container is not running after update"
+    fi
   )
 
   cat <<EOF2
 
-SensorSphere Device Agent is running.
-  image: ${IMAGE_VALUE}
+SensorSphere Device Agent update completed successfully.
+  install dir: ${INSTALL_DIR}
+  image:       ${IMAGE_VALUE}
 
 Check status with:
   cd ${INSTALL_DIR}
@@ -171,6 +195,18 @@ Follow logs with:
 
 EOF2
 else
+  if [[ "$PREEXISTING_INSTALL" == "true" ]]; then
+    URL_STATUS="configured"
+    TOKEN_STATUS="configured"
+    if [[ -z "$SENSORSPHERE_URL_VALUE" || "$SENSORSPHERE_URL_VALUE" == "http://my_sensorsphere_base_url:8080" ]]; then
+      URL_STATUS="missing or placeholder"
+    fi
+    if [[ -z "$SENSORSPHERE_TOKEN_VALUE" || "$SENSORSPHERE_TOKEN_VALUE" == "ssda_replace_me" ]]; then
+      TOKEN_STATUS="missing or placeholder"
+    fi
+    fail "Existing Device Agent installation cannot be updated because required configuration is incomplete (SENSORSPHERE_URL: ${URL_STATUS}; SENSORSPHERE_DEVICE_AGENT_TOKEN: ${TOKEN_STATUS})."
+  fi
+
   cat <<EOF2
 
 Installation files are ready.
