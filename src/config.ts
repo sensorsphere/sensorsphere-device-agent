@@ -1,6 +1,14 @@
 import os from "node:os";
 import type { LogLevel } from "./logger.js";
 
+export interface ProxmoxEndpointConfig {
+  id: string;
+  url: string;
+  tokenId: string;
+  tokenSecret: string;
+  verifyTls: boolean;
+}
+
 export interface AgentConfig {
   sensorsphereUrl: string;
   wsUrl: string;
@@ -14,6 +22,8 @@ export interface AgentConfig {
   yeelightRequestTimeoutMs: number;
   esphomeRequestTimeoutMs: number;
   esphomeNoisePsk: string | null;
+  proxmoxRequestTimeoutMs: number;
+  proxmoxEndpoints: ProxmoxEndpointConfig[];
 }
 
 function required(name: string): string {
@@ -35,6 +45,75 @@ function positiveInt(name: string, fallback: number): number {
 function parseLabels(raw: string | undefined): string[] {
   if (!raw) return [];
   return [...new Set(raw.split(",").map(value => value.trim()).filter(Boolean))];
+}
+
+function parseProxmoxEndpoints(raw: string | undefined): ProxmoxEndpointConfig[] {
+  const text = raw?.trim();
+  if (!text) return [];
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error("PROXMOX_ENDPOINTS_JSON must be valid JSON");
+  }
+
+  if (!Array.isArray(parsed)) {
+    throw new Error("PROXMOX_ENDPOINTS_JSON must be a JSON array");
+  }
+
+  const seenIds = new Set<string>();
+  return parsed.map((entry, index) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error(`PROXMOX_ENDPOINTS_JSON[${index}] must be an object`);
+    }
+
+    const value = entry as Record<string, unknown>;
+    const id = typeof value.id === "string" ? value.id.trim() : "";
+    const url = typeof value.url === "string" ? value.url.trim() : "";
+    const tokenId = typeof value.tokenId === "string" ? value.tokenId.trim() : "";
+    const tokenSecret = typeof value.tokenSecret === "string" ? value.tokenSecret.trim() : "";
+    const verifyTls = value.verifyTls === undefined ? true : value.verifyTls;
+
+    if (!id || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) {
+      throw new Error(`PROXMOX_ENDPOINTS_JSON[${index}].id must contain only letters, digits, '.', '_' or '-'`);
+    }
+    if (seenIds.has(id)) {
+      throw new Error(`Duplicate Proxmox endpoint id ${id}`);
+    }
+    seenIds.add(id);
+
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(url);
+    } catch {
+      throw new Error(`PROXMOX_ENDPOINTS_JSON[${index}].url must be a valid HTTP(S) URL`);
+    }
+    if (!["http:", "https:"].includes(parsedUrl.protocol) || parsedUrl.username || parsedUrl.password) {
+      throw new Error(`PROXMOX_ENDPOINTS_JSON[${index}].url must be an HTTP(S) URL without embedded credentials`);
+    }
+    if (!tokenId || !tokenId.includes("!")) {
+      throw new Error(`PROXMOX_ENDPOINTS_JSON[${index}].tokenId must be a Proxmox API token id such as user@realm!token`);
+    }
+    if (!tokenSecret) {
+      throw new Error(`PROXMOX_ENDPOINTS_JSON[${index}].tokenSecret is required`);
+    }
+    if (typeof verifyTls !== "boolean") {
+      throw new Error(`PROXMOX_ENDPOINTS_JSON[${index}].verifyTls must be a boolean`);
+    }
+
+    parsedUrl.pathname = parsedUrl.pathname.replace(/\/+$/, "");
+    parsedUrl.search = "";
+    parsedUrl.hash = "";
+
+    return {
+      id,
+      url: parsedUrl.toString().replace(/\/$/, ""),
+      tokenId,
+      tokenSecret,
+      verifyTls
+    };
+  });
 }
 
 function deriveWsUrl(baseUrl: string): string {
@@ -68,6 +147,8 @@ export function loadConfig(): AgentConfig {
     reconnectMaxMs: positiveInt("SENSORSPHERE_RECONNECT_MAX_MS", 30000),
     yeelightRequestTimeoutMs: positiveInt("YEELIGHT_REQUEST_TIMEOUT_MS", 5000),
     esphomeRequestTimeoutMs: positiveInt("ESPHOME_REQUEST_TIMEOUT_MS", 5000),
-    esphomeNoisePsk: process.env.ESPHOME_NOISE_PSK?.trim() || null
+    esphomeNoisePsk: process.env.ESPHOME_NOISE_PSK?.trim() || null,
+    proxmoxRequestTimeoutMs: positiveInt("PROXMOX_REQUEST_TIMEOUT_MS", 5000),
+    proxmoxEndpoints: parseProxmoxEndpoints(process.env.PROXMOX_ENDPOINTS_JSON)
   };
 }

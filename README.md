@@ -2,7 +2,7 @@
 
 Remote outbound-only agent used by SensorSphere to discover and control devices on networks that are not directly reachable from the SensorSphere server.
 
-Version: **1.0.14**
+Version: **1.1.0**
 
 ## Architecture
 
@@ -218,3 +218,25 @@ ESPHome realtime subscriptions now publish a generic entity model for light, swi
 ## Host system information
 
 The agent reports the host operating system, OS version and processor architecture to SensorSphere. Docker Compose mounts `/etc/os-release` read-only at `/host/etc/os-release` so the reported OS is the host OS rather than the container image.
+
+
+## Proxmox VE discovery
+
+The optional `PROXMOX` provider discovers Proxmox VE inventory through the PVE HTTPS API from the Device Agent network location. It is enabled only when `PROXMOX_ENDPOINTS_JSON` contains at least one endpoint, so SensorSphere does not need direct connectivity to remote Proxmox networks.
+
+Configure one or more endpoints in the Device Agent `.env` as a single JSON array. Each `id` is a stable technical scope used to build provider identities and should remain unchanged after devices are imported. API token secrets stay local to the Device Agent and are never advertised as provider capabilities or returned in discovery results.
+
+```sh
+PROXMOX_ENDPOINTS_JSON=[{"id":"home-pve","url":"https://pve-1.example.net:8006","tokenId":"sensorsphere@pve!discovery","tokenSecret":"replace_me","verifyTls":true}]
+PROXMOX_REQUEST_TIMEOUT_MS=5000
+```
+
+TLS certificate verification is enabled by default. Set `verifyTls` to `false` only for an explicitly trusted endpoint using a certificate that cannot be verified by the Device Agent.
+
+The provider reads the cluster-wide PVE resource inventory and reports:
+
+- `PVE_NODE` with a stable id such as `home-pve:node:pve-1`
+- `PVE_VM` with a stable id such as `home-pve:qemu:101`
+- `PVE_LXC` with a stable id such as `home-pve:lxc:120`
+
+VM and LXC records include `parentProviderId` pointing to their PVE node. Guest IP/MAC enrichment, Proxmox Backup Server discovery and Proxmox Device Control actions are intentionally outside the initial provider foundation.

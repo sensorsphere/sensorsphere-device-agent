@@ -4,6 +4,7 @@ import { Logger } from "./logger.js";
 import { ProviderRegistry } from "./providers/registry.js";
 import { EspHomeProvider } from "./providers/esphome.js";
 import { YeelightProvider } from "./providers/yeelight.js";
+import { ProxmoxProvider } from "./providers/proxmox.js";
 
 try {
   const config = loadConfig();
@@ -11,6 +12,9 @@ try {
   const providers = new ProviderRegistry();
   providers.register(new YeelightProvider(config.yeelightRequestTimeoutMs));
   providers.register(new EspHomeProvider(config.esphomeRequestTimeoutMs, config.esphomeNoisePsk));
+  if (config.proxmoxEndpoints.length > 0) {
+    providers.register(new ProxmoxProvider(config.proxmoxEndpoints, config.proxmoxRequestTimeoutMs));
+  }
 
   const agent = new DeviceAgent(config, providers, logger);
 
