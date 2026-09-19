@@ -16,21 +16,51 @@ async function close(server: http.Server): Promise<void> {
   await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
 }
 
-test("ProxmoxProvider discovers PVE nodes, QEMU VMs and LXC containers with stable ids", async () => {
+test("ProxmoxProvider discovers and enriches PVE nodes, QEMU VMs and LXC containers", async () => {
   let authorization = "";
-  let requestedPath = "";
+  const requestedPaths: string[] = [];
   const server = http.createServer((request, response) => {
     authorization = request.headers.authorization || "";
-    requestedPath = request.url || "";
+    requestedPaths.push(request.url || "");
     response.setHeader("content-type", "application/json");
-    response.end(JSON.stringify({
-      data: [
-        { type: "node", node: "pve-1", status: "online", uptime: 1234 },
-        { type: "qemu", vmid: 101, node: "pve-1", name: "homeassistant", status: "running", maxcpu: 4, maxmem: 8589934592 },
-        { type: "lxc", vmid: 120, node: "pve-1", name: "mqtt", status: "stopped", template: 0 },
-        { type: "storage", id: "storage/pve-1/local" }
-      ]
-    }));
+    if (request.url === "/api2/json/cluster/resources") {
+      response.end(JSON.stringify({
+        data: [
+          { type: "node", node: "pve-1", status: "online", uptime: 1234 },
+          { type: "qemu", vmid: 101, node: "pve-1", name: "homeassistant", status: "running", maxcpu: 4, maxmem: 8589934592 },
+          { type: "lxc", vmid: 120, node: "pve-1", name: "mqtt", status: "stopped", template: 0 },
+          { type: "storage", id: "storage/pve-1/local" }
+        ]
+      }));
+      return;
+    }
+    if (request.url === "/api2/json/nodes/pve-1/qemu/101/config") {
+      response.end(JSON.stringify({ data: {
+        agent: "enabled=1",
+        ostype: "l26",
+        net0: "virtio=BC:24:11:22:33:44,bridge=vmbr0",
+        ipconfig0: "ip=192.168.1.101/24,gw=192.168.1.1"
+      } }));
+      return;
+    }
+    if (request.url === "/api2/json/nodes/pve-1/qemu/101/agent/network-get") {
+      response.end(JSON.stringify({ data: { result: [{
+        name: "eth0",
+        "hardware-address": "BC:24:11:22:33:44",
+        "ip-addresses": [{ "ip-address": "10.0.0.101", "ip-address-type": "ipv4", prefix: 24 }]
+      }] } }));
+      return;
+    }
+    if (request.url === "/api2/json/nodes/pve-1/lxc/120/config") {
+      response.end(JSON.stringify({ data: {
+        hostname: "mqtt-lxc",
+        ostype: "debian",
+        net0: "name=eth0,bridge=vmbr0,hwaddr=BC:24:11:AA:BB:CC,ip=10.0.0.120/24,type=veth"
+      } }));
+      return;
+    }
+    response.statusCode = 404;
+    response.end(JSON.stringify({ data: null }));
   });
 
   const port = await listen(server);
@@ -45,8 +75,11 @@ test("ProxmoxProvider discovers PVE nodes, QEMU VMs and LXC containers with stab
 
     const devices = await provider.discover(5000);
 
-    assert.equal(requestedPath, "/api2/json/cluster/resources");
     assert.equal(authorization, "PVEAPIToken=sensorsphere@pve!discovery=test-secret");
+    assert.ok(requestedPaths.includes("/api2/json/cluster/resources"));
+    assert.ok(requestedPaths.includes("/api2/json/nodes/pve-1/qemu/101/config"));
+    assert.ok(requestedPaths.includes("/api2/json/nodes/pve-1/qemu/101/agent/network-get"));
+    assert.ok(requestedPaths.includes("/api2/json/nodes/pve-1/lxc/120/config"));
     assert.deepEqual(devices, [
       {
         kind: "PVE_LXC",
@@ -57,7 +90,14 @@ test("ProxmoxProvider discovers PVE nodes, QEMU VMs and LXC containers with stab
         name: "mqtt",
         parentProviderId: "home-pve:node:pve-1",
         status: "stopped",
-        template: false
+        template: false,
+        hostname: "mqtt-lxc",
+        osType: "debian",
+        os: "Debian",
+        ip: "10.0.0.120",
+        ipAddresses: ["10.0.0.120"],
+        mac: "BC:24:11:AA:BB:CC",
+        macAddresses: ["BC:24:11:AA:BB:CC"]
       },
       {
         kind: "PVE_NODE",
@@ -78,9 +118,52 @@ test("ProxmoxProvider discovers PVE nodes, QEMU VMs and LXC containers with stab
         parentProviderId: "home-pve:node:pve-1",
         status: "running",
         maxcpu: 4,
-        maxmem: 8589934592
+        maxmem: 8589934592,
+        osType: "l26",
+        os: "Linux",
+        ip: "10.0.0.101",
+        ipAddresses: ["10.0.0.101", "192.168.1.101"],
+        mac: "BC:24:11:22:33:44",
+        macAddresses: ["BC:24:11:22:33:44"],
+        guestAgent: true
       }
     ]);
+  } finally {
+    await close(server);
+  }
+});
+
+test("ProxmoxProvider keeps base discovery when guest detail endpoints are unavailable", async () => {
+  const server = http.createServer((request, response) => {
+    response.setHeader("content-type", "application/json");
+    if (request.url === "/api2/json/cluster/resources") {
+      response.end(JSON.stringify({ data: [{ type: "qemu", vmid: 201, node: "pve-1", name: "no-agent", status: "running" }] }));
+      return;
+    }
+    response.statusCode = 403;
+    response.end(JSON.stringify({ errors: "permission denied" }));
+  });
+
+  const port = await listen(server);
+  try {
+    const provider = new ProxmoxProvider([{
+      id: "home-pve",
+      url: `http://127.0.0.1:${port}`,
+      tokenId: "sensorsphere@pve!discovery",
+      tokenSecret: "test-secret",
+      verifyTls: true
+    }]);
+    const devices = await provider.discover(5000);
+    assert.deepEqual(devices, [{
+      kind: "PVE_VM",
+      providerId: "home-pve:qemu:201",
+      endpointId: "home-pve",
+      vmid: 201,
+      node: "pve-1",
+      name: "no-agent",
+      parentProviderId: "home-pve:node:pve-1",
+      status: "running"
+    }]);
   } finally {
     await close(server);
   }

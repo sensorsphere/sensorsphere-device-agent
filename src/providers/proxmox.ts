@@ -22,6 +22,22 @@ interface ProxmoxResource {
   template?: unknown;
 }
 
+interface ProxmoxGuestConfig extends Record<string, unknown> {
+  hostname?: unknown;
+  ostype?: unknown;
+  agent?: unknown;
+}
+
+interface ProxmoxGuestAgentInterface {
+  name?: unknown;
+  ['hardware-address']?: unknown;
+  ['ip-addresses']?: unknown;
+}
+
+interface ProxmoxGuestAgentNetworkResult {
+  result?: unknown;
+}
+
 export interface ProxmoxDiscoveryRecord extends Record<string, unknown> {
   kind: "PVE_NODE" | "PVE_VM" | "PVE_LXC";
   providerId: string;
@@ -98,6 +114,82 @@ function normalizeResource(endpoint: ProxmoxEndpointConfig, resource: ProxmoxRes
   return null;
 }
 
+
+function splitConfigValue(value: string): Record<string, string> {
+  return Object.fromEntries(value.split(",").map(part => {
+    const [key, ...rest] = part.split("=");
+    return [key?.trim() || "", rest.join("=").trim()];
+  }).filter(([key]) => key));
+}
+
+function normalizeMac(value: unknown): string | undefined {
+  const raw = stringValue(value)?.toUpperCase();
+  return raw && /^(?:[0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(raw) ? raw : undefined;
+}
+
+function normalizeIp(value: unknown): string | undefined {
+  const raw = stringValue(value);
+  if (!raw) return undefined;
+  const withoutPrefix = raw.split("/")[0]?.trim();
+  if (!withoutPrefix || withoutPrefix === "127.0.0.1" || withoutPrefix === "::1" || withoutPrefix.startsWith("169.254.") || withoutPrefix.toLowerCase().startsWith("fe80:")) return undefined;
+  return withoutPrefix;
+}
+
+function configNetworks(config: ProxmoxGuestConfig): { ips: string[]; macs: string[] } {
+  const ips: string[] = [];
+  const macs: string[] = [];
+  for (const [key, raw] of Object.entries(config)) {
+    if (typeof raw !== "string") continue;
+    if (/^net\d+$/.test(key)) {
+      const parts = splitConfigValue(raw);
+      const mac = normalizeMac(parts.hwaddr) || normalizeMac(Object.values(parts).find(value => /^(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/.test(value)));
+      if (mac) macs.push(mac);
+      const ip = normalizeIp(parts.ip);
+      if (ip && parts.ip?.toLowerCase() !== "dhcp") ips.push(ip);
+    } else if (/^ipconfig\d+$/.test(key)) {
+      const parts = splitConfigValue(raw);
+      const ip = normalizeIp(parts.ip);
+      if (ip && parts.ip?.toLowerCase() !== "dhcp") ips.push(ip);
+    }
+  }
+  return { ips: [...new Set(ips)], macs: [...new Set(macs)] };
+}
+
+function guestAgentNetworks(payload: ProxmoxGuestAgentNetworkResult | undefined): { ips: string[]; macs: string[] } {
+  if (!payload || !Array.isArray(payload.result)) return { ips: [], macs: [] };
+  const ips: string[] = [];
+  const macs: string[] = [];
+  for (const item of payload.result as ProxmoxGuestAgentInterface[]) {
+    const name = stringValue(item.name)?.toLowerCase();
+    if (name === "lo" || name === "loopback") continue;
+    const mac = normalizeMac(item["hardware-address"]);
+    if (mac && mac !== "00:00:00:00:00:00") macs.push(mac);
+    if (Array.isArray(item["ip-addresses"])) {
+      for (const ipItem of item["ip-addresses"] as Array<Record<string, unknown>>) {
+        const ip = normalizeIp(ipItem["ip-address"]);
+        if (ip) ips.push(ip);
+      }
+    }
+  }
+  return { ips: [...new Set(ips)], macs: [...new Set(macs)] };
+}
+
+function guestOsLabel(kind: "PVE_VM" | "PVE_LXC", ostype: string | undefined): string | undefined {
+  if (!ostype) return undefined;
+  const labels: Record<string, string> = {
+    l26: "Linux", win10: "Windows 10/11", win11: "Windows 11", w2k19: "Windows Server 2019", w2k22: "Windows Server 2022",
+    debian: "Debian", ubuntu: "Ubuntu", centos: "CentOS", fedora: "Fedora", archlinux: "Arch Linux", alpine: "Alpine Linux"
+  };
+  return labels[ostype.toLowerCase()] || (kind === "PVE_LXC" ? ostype : ostype.toUpperCase());
+}
+
+function agentEnabled(config: ProxmoxGuestConfig): boolean {
+  const value = config.agent;
+  if (value === 1 || value === true) return true;
+  const text = stringValue(value)?.toLowerCase();
+  return text === "1" || text === "yes" || text?.includes("enabled=1") === true;
+}
+
 function apiUrl(endpoint: ProxmoxEndpointConfig, path: string): URL {
   const base = new URL(endpoint.url);
   const basePath = base.pathname.replace(/\/+$/, "");
@@ -148,6 +240,46 @@ async function apiGet<T>(endpoint: ProxmoxEndpointConfig, path: string, timeoutM
   });
 }
 
+
+async function apiGetOptional<T>(endpoint: ProxmoxEndpointConfig, path: string, timeoutMs: number): Promise<T | undefined> {
+  try {
+    return await apiGet<T>(endpoint, path, timeoutMs);
+  } catch {
+    return undefined;
+  }
+}
+
+async function enrichGuest(endpoint: ProxmoxEndpointConfig, record: ProxmoxDiscoveryRecord, timeoutMs: number): Promise<ProxmoxDiscoveryRecord> {
+  if ((record.kind !== "PVE_VM" && record.kind !== "PVE_LXC") || typeof record.node !== "string" || typeof record.vmid !== "number") return record;
+  const type = record.kind === "PVE_VM" ? "qemu" : "lxc";
+  const base = `/nodes/${encodeURIComponent(record.node)}/${type}/${record.vmid}`;
+  const config = await apiGetOptional<ProxmoxGuestConfig>(endpoint, `${base}/config`, timeoutMs);
+  if (!config) return record;
+
+  const configured = configNetworks(config);
+  let agentNetwork = { ips: [] as string[], macs: [] as string[] };
+  if (record.kind === "PVE_VM" && record.status === "running" && agentEnabled(config)) {
+    const payload = await apiGetOptional<ProxmoxGuestAgentNetworkResult>(endpoint, `${base}/agent/network-get`, timeoutMs);
+    agentNetwork = guestAgentNetworks(payload);
+  }
+
+  const ips = [...new Set([...agentNetwork.ips, ...configured.ips])].sort((left, right) => Number(left.includes(":")) - Number(right.includes(":")));
+  const macs = [...new Set([...agentNetwork.macs, ...configured.macs])];
+  const hostname = stringValue(config.hostname);
+  const ostype = stringValue(config.ostype);
+  const os = guestOsLabel(record.kind, ostype);
+
+  return {
+    ...record,
+    ...(hostname ? { hostname } : {}),
+    ...(ostype ? { osType: ostype } : {}),
+    ...(os ? { os } : {}),
+    ...(ips[0] ? { ip: ips[0], ipAddresses: ips } : {}),
+    ...(macs[0] ? { mac: macs[0], macAddresses: macs } : {}),
+    ...(record.kind === "PVE_VM" ? { guestAgent: agentEnabled(config) } : {})
+  };
+}
+
 export class ProxmoxProvider implements Provider {
   readonly provider = "PROXMOX";
   readonly actions: string[] = [];
@@ -164,9 +296,10 @@ export class ProxmoxProvider implements Provider {
       if (!Array.isArray(resources)) {
         throw new Error(`Proxmox endpoint ${endpoint.id} returned an invalid cluster resource list`);
       }
-      return resources
+      const normalized = resources
         .map(resource => normalizeResource(endpoint, resource))
         .filter((resource): resource is ProxmoxDiscoveryRecord => resource !== null);
+      return Promise.all(normalized.map(resource => enrichGuest(endpoint, resource, effectiveTimeoutMs)));
     }));
 
     return discovered.flat().sort((left, right) => left.providerId.localeCompare(right.providerId));
