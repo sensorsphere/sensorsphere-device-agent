@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import net from "node:net";
 
-export type SupervisorAction = "GET_STATUS" | "UPDATE_AGENT" | "GET_SELF_STATUS" | "UPDATE_SELF";
+export type SupervisorAction = "LIST_AGENTS" | "GET_STATUS" | "DEPLOY_AGENT" | "UPDATE_AGENT" | "REMOVE_AGENT" | "GET_SELF_STATUS" | "UPDATE_SELF";
 
 export interface SupervisorSelfStatus {
   install_dir?: string;
@@ -44,6 +44,22 @@ export class SupervisorClient {
 
   async updateAgent(requestId: string, version: string): Promise<SupervisorResponse> {
     return this.request({ request_id: requestId, action: "UPDATE_AGENT", version });
+  }
+
+  async listAgents(requestId: string): Promise<SupervisorResponse> {
+    return this.request({ request_id: requestId, action: "LIST_AGENTS" }, Math.min(this.timeoutMs, 10000));
+  }
+
+  async deployAgent(requestId: string, agentType: "device-agent" | "monitor-agent", instance: string, version: string, environment: Record<string, string>): Promise<SupervisorResponse> {
+    return this.request({ request_id: requestId, action: "DEPLOY_AGENT", agent_type: agentType, instance, version, environment });
+  }
+
+  async updateManagedAgent(requestId: string, agentType: "device-agent" | "monitor-agent", instance: string, version: string): Promise<SupervisorResponse> {
+    return this.request({ request_id: requestId, action: "UPDATE_AGENT", agent_type: agentType, instance, version });
+  }
+
+  async removeManagedAgent(requestId: string, agentType: "device-agent" | "monitor-agent", instance: string): Promise<SupervisorResponse> {
+    return this.request({ request_id: requestId, action: "REMOVE_AGENT", agent_type: agentType, instance });
   }
 
   async getSelfStatus(requestId: string): Promise<SupervisorResponse> {

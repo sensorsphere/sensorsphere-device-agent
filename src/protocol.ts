@@ -68,6 +68,21 @@ export interface SupervisorUpdateRequestMessage {
   expiresAt?: string;
 }
 
+
+export type ManagedAgentOperation = "LIST" | "DEPLOY" | "UPDATE" | "REMOVE";
+export type ManagedAgentType = "device-agent" | "monitor-agent";
+
+export interface ManagedAgentRequestMessage {
+  type: "MANAGED_AGENT_REQUEST";
+  commandId: string;
+  operation: ManagedAgentOperation;
+  agentType?: ManagedAgentType;
+  instance?: string;
+  version?: string;
+  environment?: Record<string, string>;
+  expiresAt?: string;
+}
+
 export interface DiscoveredDeviceActionRequestMessage {
   type: "DISCOVERED_DEVICE_ACTION_REQUEST";
   commandId: string;
@@ -77,7 +92,7 @@ export interface DiscoveredDeviceActionRequestMessage {
   parameters?: Record<string, unknown>;
 }
 
-export type ServerMessage = CommandMessage | DiscoverRequestMessage | AgentUpdateRequestMessage | SupervisorUpdateRequestMessage | DiscoveredDeviceActionRequestMessage | HelloAckMessage | HeartbeatAckMessage | SyncDevicesMessage | {
+export type ServerMessage = CommandMessage | DiscoverRequestMessage | AgentUpdateRequestMessage | SupervisorUpdateRequestMessage | ManagedAgentRequestMessage | DiscoveredDeviceActionRequestMessage | HelloAckMessage | HeartbeatAckMessage | SyncDevicesMessage | {
   type: string;
   [key: string]: unknown;
 };

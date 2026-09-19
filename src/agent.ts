@@ -2,7 +2,7 @@ import os from "node:os";
 import WebSocket from "ws";
 import type { AgentConfig } from "./config.js";
 import type { Logger } from "./logger.js";
-import type { AgentUpdateRequestMessage, CommandMessage, DiscoveredDeviceActionRequestMessage, DiscoverRequestMessage, ServerMessage, SupervisorUpdateRequestMessage, SyncDevicesMessage } from "./protocol.js";
+import type { AgentUpdateRequestMessage, CommandMessage, DiscoveredDeviceActionRequestMessage, DiscoverRequestMessage, ManagedAgentRequestMessage, ServerMessage, SupervisorUpdateRequestMessage, SyncDevicesMessage } from "./protocol.js";
 
 function isDiscoverRequestMessage(message: ServerMessage): message is DiscoverRequestMessage {
   return message.type === "DISCOVER_REQUEST"
@@ -22,6 +22,13 @@ function isSupervisorUpdateRequestMessage(message: ServerMessage): message is Su
   return message.type === "SUPERVISOR_UPDATE_REQUEST"
     && "commandId" in message && typeof message.commandId === "string"
     && "version" in message && typeof message.version === "string";
+}
+
+
+function isManagedAgentRequestMessage(message: ServerMessage): message is ManagedAgentRequestMessage {
+  return message.type === "MANAGED_AGENT_REQUEST"
+    && "commandId" in message && typeof message.commandId === "string"
+    && "operation" in message && ["LIST", "DEPLOY", "UPDATE", "REMOVE"].includes(String(message.operation));
 }
 
 function isDiscoveredDeviceActionRequestMessage(message: ServerMessage): message is DiscoveredDeviceActionRequestMessage {
@@ -230,6 +237,11 @@ export class DeviceAgent {
       return;
     }
 
+    if (isManagedAgentRequestMessage(message)) {
+      await this.executeManagedAgentRequest(message);
+      return;
+    }
+
     if (isDiscoveredDeviceActionRequestMessage(message)) {
       await this.executeDiscoveredDeviceAction(message);
       return;
@@ -335,6 +347,44 @@ export class DeviceAgent {
     }
   }
 
+
+  private async executeManagedAgentRequest(request: ManagedAgentRequestMessage): Promise<void> {
+    if (request.expiresAt && Date.parse(request.expiresAt) <= Date.now()) {
+      this.send({ type: "MANAGED_AGENT_RESULT", commandId: request.commandId, operation: request.operation, status: "FAILED", error: "Managed Agent request expired before execution" });
+      return;
+    }
+    if (!(await this.supervisor.isAvailable())) {
+      this.send({ type: "MANAGED_AGENT_RESULT", commandId: request.commandId, operation: request.operation, status: "FAILED", error: "Supervisor Agent is unavailable" });
+      return;
+    }
+    try {
+      let response;
+      const instance = request.instance?.trim() || "main";
+      if (request.operation === "LIST") {
+        response = await this.supervisor.listAgents(request.commandId);
+      } else if (request.operation === "DEPLOY") {
+        if (!request.agentType || !request.version) throw new Error("agentType and version are required for DEPLOY");
+        response = await this.supervisor.deployAgent(request.commandId, request.agentType, instance, request.version, request.environment ?? {});
+      } else if (request.operation === "UPDATE") {
+        if (!request.agentType || !request.version) throw new Error("agentType and version are required for UPDATE");
+        response = await this.supervisor.updateManagedAgent(request.commandId, request.agentType, instance, request.version);
+      } else {
+        if (!request.agentType) throw new Error("agentType is required for REMOVE");
+        response = await this.supervisor.removeManagedAgent(request.commandId, request.agentType, instance);
+      }
+      this.send({
+        type: "MANAGED_AGENT_RESULT",
+        commandId: request.commandId,
+        operation: request.operation,
+        status: response.ok ? "SUCCESS" : "FAILED",
+        result: response.result ?? null,
+        error: response.ok ? null : response.error ?? "Supervisor Agent rejected the managed-agent request"
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.send({ type: "MANAGED_AGENT_RESULT", commandId: request.commandId, operation: request.operation, status: "FAILED", error: message });
+    }
+  }
 
   private async executeSupervisorUpdate(request: SupervisorUpdateRequestMessage): Promise<void> {
     if (request.expiresAt && Date.parse(request.expiresAt) <= Date.now()) {
