@@ -70,7 +70,8 @@ test("ProxmoxProvider discovers and enriches PVE nodes, QEMU VMs and LXC contain
       url: `http://127.0.0.1:${port}`,
       tokenId: "sensorsphere@pve!discovery",
       tokenSecret: "test-secret",
-      verifyTls: true
+      verifyTls: true,
+      product: "PVE"
     }], 5000);
 
     const devices = await provider.discover(5000);
@@ -151,7 +152,8 @@ test("ProxmoxProvider keeps base discovery when guest detail endpoints are unava
       url: `http://127.0.0.1:${port}`,
       tokenId: "sensorsphere@pve!discovery",
       tokenSecret: "test-secret",
-      verifyTls: true
+      verifyTls: true,
+      product: "PVE"
     }]);
     const devices = await provider.discover(5000);
     assert.deepEqual(devices, [{
@@ -182,7 +184,8 @@ test("ProxmoxProvider error messages identify an endpoint without exposing its t
       url: `http://127.0.0.1:${port}`,
       tokenId: "sensorsphere@pve!discovery",
       tokenSecret: "never-log-this",
-      verifyTls: true
+      verifyTls: true,
+      product: "PVE"
     }]);
 
     await assert.rejects(
@@ -191,6 +194,54 @@ test("ProxmoxProvider error messages identify an endpoint without exposing its t
         && error.message.includes("home-pve")
         && !error.message.includes("never-log-this")
     );
+  } finally {
+    await close(server);
+  }
+});
+
+
+test("ProxmoxProvider discovers Proxmox Backup Server endpoints", async () => {
+  let authorization = "";
+  const server = http.createServer((request, response) => {
+    authorization = request.headers.authorization || "";
+    response.setHeader("content-type", "application/json");
+    if (request.url === "/api2/json/version") {
+      response.end(JSON.stringify({ data: { version: "4.2.6", release: "4.2.6-1", repoid: "pbs" } }));
+      return;
+    }
+    if (request.url === "/api2/json/nodes") {
+      response.end(JSON.stringify({ data: [{ node: "pbs-01", status: "online", uptime: 9876 }] }));
+      return;
+    }
+    response.statusCode = 404;
+    response.end(JSON.stringify({ data: null }));
+  });
+
+  const port = await listen(server);
+  try {
+    const provider = new ProxmoxProvider([{
+      id: "home-pbs",
+      product: "PBS",
+      url: `http://127.0.0.1:${port}`,
+      tokenId: "sensorsphere@pbs!discovery",
+      tokenSecret: "pbs-secret",
+      verifyTls: true
+    }], 5000);
+    const devices = await provider.discover(5000);
+    assert.equal(authorization, "PBSAPIToken=sensorsphere@pbs!discovery:pbs-secret");
+    assert.deepEqual(devices, [{
+      kind: "PBS_SERVER",
+      providerId: "home-pbs:pbs",
+      endpointId: "home-pbs",
+      product: "PBS",
+      name: "pbs-01",
+      hostname: "pbs-01",
+      node: "pbs-01",
+      status: "online",
+      version: "4.2.6-1",
+      firmwareVersion: "4.2.6-1",
+      uptime: 9876
+    }]);
   } finally {
     await close(server);
   }

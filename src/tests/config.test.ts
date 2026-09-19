@@ -39,14 +39,16 @@ test("loadConfig parses Proxmox API token endpoints without exposing them elsewh
           id: "home-pve",
           url: "https://pve.example.test:8006/",
           tokenId: "sensorsphere@pve!discovery",
-          tokenSecret: "secret-value"
+          tokenSecret: "secret-value",
+          product: "PVE"
         },
         {
           id: "lab-pve",
           url: "http://192.0.2.20:8006",
           tokenId: "sensorsphere@pve!discovery",
           tokenSecret: "other-secret",
-          verifyTls: false
+          verifyTls: false,
+          product: "PVE"
         }
       ])
     };
@@ -59,16 +61,36 @@ test("loadConfig parses Proxmox API token endpoints without exposing them elsewh
         url: "https://pve.example.test:8006",
         tokenId: "sensorsphere@pve!discovery",
         tokenSecret: "secret-value",
-        verifyTls: true
+        verifyTls: true,
+        product: "PVE"
       },
       {
         id: "lab-pve",
         url: "http://192.0.2.20:8006",
         tokenId: "sensorsphere@pve!discovery",
         tokenSecret: "other-secret",
-        verifyTls: false
+        verifyTls: false,
+        product: "PVE"
       }
     ]);
+  } finally {
+    process.env = previous;
+  }
+});
+
+test("loadConfig parses Proxmox Backup Server endpoints", () => {
+  const previous = { ...process.env };
+  try {
+    process.env = {
+      ...withBaseEnvironment(),
+      PROXMOX_ENDPOINTS_JSON: JSON.stringify([
+        { id: "backup-1", product: "PBS", url: "https://pbs.example.test:8007", tokenId: "sensorsphere@pbs!discovery", tokenSecret: "pbs-secret", verifyTls: false }
+      ])
+    };
+    const config = loadConfig();
+    assert.deepEqual(config.proxmoxEndpoints, [{
+      id: "backup-1", url: "https://pbs.example.test:8007", tokenId: "sensorsphere@pbs!discovery", tokenSecret: "pbs-secret", verifyTls: false, product: "PBS"
+    }]);
   } finally {
     process.env = previous;
   }

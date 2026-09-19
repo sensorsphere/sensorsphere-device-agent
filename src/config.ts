@@ -7,6 +7,7 @@ export interface ProxmoxEndpointConfig {
   tokenId: string;
   tokenSecret: string;
   verifyTls: boolean;
+  product: "PVE" | "PBS";
 }
 
 export interface AgentConfig {
@@ -76,6 +77,7 @@ function parseProxmoxEndpoints(raw: string | undefined): ProxmoxEndpointConfig[]
     const tokenId = typeof value.tokenId === "string" ? value.tokenId.trim() : "";
     const tokenSecret = typeof value.tokenSecret === "string" ? value.tokenSecret.trim() : "";
     const verifyTls = value.verifyTls === undefined ? true : value.verifyTls;
+    const rawProduct = typeof value.product === "string" ? value.product.trim().toUpperCase() : "PVE";
 
     if (!id || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) {
       throw new Error(`PROXMOX_ENDPOINTS_JSON[${index}].id must contain only letters, digits, '.', '_' or '-'`);
@@ -103,6 +105,9 @@ function parseProxmoxEndpoints(raw: string | undefined): ProxmoxEndpointConfig[]
     if (typeof verifyTls !== "boolean") {
       throw new Error(`PROXMOX_ENDPOINTS_JSON[${index}].verifyTls must be a boolean`);
     }
+    if (rawProduct !== "PVE" && rawProduct !== "PBS") {
+      throw new Error(`PROXMOX_ENDPOINTS_JSON[${index}].product must be PVE or PBS`);
+    }
 
     parsedUrl.pathname = parsedUrl.pathname.replace(/\/+$/, "");
     parsedUrl.search = "";
@@ -113,7 +118,8 @@ function parseProxmoxEndpoints(raw: string | undefined): ProxmoxEndpointConfig[]
       url: parsedUrl.toString().replace(/\/$/, ""),
       tokenId,
       tokenSecret,
-      verifyTls
+      verifyTls,
+      product: rawProduct as "PVE" | "PBS"
     };
   });
 }

@@ -1,5 +1,6 @@
 import http from "node:http";
 import https from "node:https";
+import { isIP } from "node:net";
 import type { ProxmoxEndpointConfig } from "../config.js";
 import type { CommandMessage, Provider, ProviderCommandResult } from "../protocol.js";
 
@@ -38,8 +39,23 @@ interface ProxmoxGuestAgentNetworkResult {
   result?: unknown;
 }
 
+interface ProxmoxBackupVersion {
+  version?: unknown;
+  release?: unknown;
+  repoid?: unknown;
+}
+
+interface ProxmoxBackupNode {
+  node?: unknown;
+  status?: unknown;
+  uptime?: unknown;
+  cpu?: unknown;
+  mem?: unknown;
+  maxmem?: unknown;
+}
+
 export interface ProxmoxDiscoveryRecord extends Record<string, unknown> {
-  kind: "PVE_NODE" | "PVE_VM" | "PVE_LXC";
+  kind: "PVE_NODE" | "PVE_VM" | "PVE_LXC" | "PBS_SERVER";
   providerId: string;
   endpointId: string;
 }
@@ -208,7 +224,9 @@ async function apiGet<T>(endpoint: ProxmoxEndpointConfig, path: string, timeoutM
       method: "GET",
       headers: {
         Accept: "application/json",
-        Authorization: `PVEAPIToken=${endpoint.tokenId}=${endpoint.tokenSecret}`
+        Authorization: endpoint.product === "PBS"
+          ? `PBSAPIToken=${endpoint.tokenId}:${endpoint.tokenSecret}`
+          : `PVEAPIToken=${endpoint.tokenId}=${endpoint.tokenSecret}`
       },
       ...(url.protocol === "https:" ? { rejectUnauthorized: endpoint.verifyTls } : {})
     }, response => {
@@ -247,6 +265,38 @@ async function apiGetOptional<T>(endpoint: ProxmoxEndpointConfig, path: string, 
   } catch {
     return undefined;
   }
+}
+
+async function discoverPbs(endpoint: ProxmoxEndpointConfig, timeoutMs: number): Promise<ProxmoxDiscoveryRecord[]> {
+  const versionInfo = await apiGet<ProxmoxBackupVersion>(endpoint, "/version", timeoutMs);
+  const nodes = await apiGetOptional<ProxmoxBackupNode[]>(endpoint, "/nodes", timeoutMs);
+  const nodeInfo = Array.isArray(nodes) ? nodes[0] : undefined;
+  const endpointUrl = new URL(endpoint.url);
+  const node = stringValue(nodeInfo?.node) || endpointUrl.hostname;
+  const status = stringValue(nodeInfo?.status) || "online";
+  const release = stringValue(versionInfo.release) || stringValue(versionInfo.version);
+  const record: ProxmoxDiscoveryRecord = {
+    kind: "PBS_SERVER",
+    providerId: `${endpoint.id}:pbs`,
+    endpointId: endpoint.id,
+    product: "PBS",
+    name: node,
+    hostname: node,
+    node,
+    status,
+    ...(release ? { version: release, firmwareVersion: release } : {})
+  };
+  const uptime = numberValue(nodeInfo?.uptime);
+  const cpu = numberValue(nodeInfo?.cpu);
+  const mem = numberValue(nodeInfo?.mem);
+  const maxmem = numberValue(nodeInfo?.maxmem);
+  if (uptime !== undefined) record.uptime = uptime;
+  if (cpu !== undefined) record.cpu = cpu;
+  if (mem !== undefined) record.mem = mem;
+  if (maxmem !== undefined) record.maxmem = maxmem;
+  const endpointIp = normalizeIp(endpointUrl.hostname);
+  if (endpointIp) record.ip = endpointIp;
+  return [record];
 }
 
 async function enrichGuest(endpoint: ProxmoxEndpointConfig, record: ProxmoxDiscoveryRecord, timeoutMs: number): Promise<ProxmoxDiscoveryRecord> {
@@ -292,6 +342,9 @@ export class ProxmoxProvider implements Provider {
   async discover(timeoutMs: number): Promise<Array<Record<string, unknown>>> {
     const effectiveTimeoutMs = Math.min(timeoutMs, this.requestTimeoutMs);
     const discovered = await Promise.all(this.endpoints.map(async endpoint => {
+      if (endpoint.product === "PBS") {
+        return discoverPbs(endpoint, effectiveTimeoutMs);
+      }
       const resources = await apiGet<ProxmoxResource[]>(endpoint, "/cluster/resources", effectiveTimeoutMs);
       if (!Array.isArray(resources)) {
         throw new Error(`Proxmox endpoint ${endpoint.id} returned an invalid cluster resource list`);
