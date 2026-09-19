@@ -21,6 +21,8 @@ test("loadConfig derives WebSocket URL and normalizes labels", () => {
     assert.deepEqual(config.agentLabels, ["site-home", "lan-main"]);
     assert.equal(config.agentName, "test-agent");
     assert.deepEqual(config.proxmoxEndpoints, []);
+    assert.equal(config.supervisorSocketPath, "/run/sensorsphere-supervisor-agent/supervisor.sock");
+    assert.equal(config.supervisorRequestTimeoutMs, 130000);
   } finally {
     process.env = previous;
   }
@@ -84,6 +86,23 @@ test("loadConfig rejects duplicate Proxmox endpoint ids", () => {
     };
 
     assert.throws(() => loadConfig(), /Duplicate Proxmox endpoint id pve/);
+  } finally {
+    process.env = previous;
+  }
+});
+
+
+test("loadConfig accepts Supervisor Agent socket settings", () => {
+  const previous = { ...process.env };
+  try {
+    process.env = {
+      ...withBaseEnvironment(),
+      SENSORSPHERE_SUPERVISOR_SOCKET_PATH: "/custom/supervisor.sock",
+      SENSORSPHERE_SUPERVISOR_REQUEST_TIMEOUT_MS: "150000"
+    };
+    const config = loadConfig();
+    assert.equal(config.supervisorSocketPath, "/custom/supervisor.sock");
+    assert.equal(config.supervisorRequestTimeoutMs, 150000);
   } finally {
     process.env = previous;
   }

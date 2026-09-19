@@ -24,6 +24,8 @@ export interface AgentConfig {
   esphomeNoisePsk: string | null;
   proxmoxRequestTimeoutMs: number;
   proxmoxEndpoints: ProxmoxEndpointConfig[];
+  supervisorSocketPath: string;
+  supervisorRequestTimeoutMs: number;
 }
 
 function required(name: string): string {
@@ -149,6 +151,8 @@ export function loadConfig(): AgentConfig {
     esphomeRequestTimeoutMs: positiveInt("ESPHOME_REQUEST_TIMEOUT_MS", 5000),
     esphomeNoisePsk: process.env.ESPHOME_NOISE_PSK?.trim() || null,
     proxmoxRequestTimeoutMs: positiveInt("PROXMOX_REQUEST_TIMEOUT_MS", 5000),
-    proxmoxEndpoints: parseProxmoxEndpoints(process.env.PROXMOX_ENDPOINTS_JSON)
+    proxmoxEndpoints: parseProxmoxEndpoints(process.env.PROXMOX_ENDPOINTS_JSON),
+    supervisorSocketPath: process.env.SENSORSPHERE_SUPERVISOR_SOCKET_PATH?.trim() || "/run/sensorsphere-supervisor-agent/supervisor.sock",
+    supervisorRequestTimeoutMs: positiveInt("SENSORSPHERE_SUPERVISOR_REQUEST_TIMEOUT_MS", 130000)
   };
 }

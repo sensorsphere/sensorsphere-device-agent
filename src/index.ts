@@ -5,6 +5,7 @@ import { ProviderRegistry } from "./providers/registry.js";
 import { EspHomeProvider } from "./providers/esphome.js";
 import { YeelightProvider } from "./providers/yeelight.js";
 import { ProxmoxProvider } from "./providers/proxmox.js";
+import { SupervisorClient } from "./supervisor-client.js";
 
 try {
   const config = loadConfig();
@@ -16,7 +17,8 @@ try {
     providers.register(new ProxmoxProvider(config.proxmoxEndpoints, config.proxmoxRequestTimeoutMs));
   }
 
-  const agent = new DeviceAgent(config, providers, logger);
+  const supervisor = new SupervisorClient(config.supervisorSocketPath, config.supervisorRequestTimeoutMs);
+  const agent = new DeviceAgent(config, providers, logger, supervisor);
 
   process.on("SIGTERM", () => {
     logger.info("SIGTERM received, stopping Device Agent");

@@ -2,7 +2,7 @@ import os from "node:os";
 import WebSocket from "ws";
 import type { AgentConfig } from "./config.js";
 import type { Logger } from "./logger.js";
-import type { CommandMessage, DiscoveredDeviceActionRequestMessage, DiscoverRequestMessage, ServerMessage, SyncDevicesMessage } from "./protocol.js";
+import type { AgentUpdateRequestMessage, CommandMessage, DiscoveredDeviceActionRequestMessage, DiscoverRequestMessage, ServerMessage, SyncDevicesMessage } from "./protocol.js";
 
 function isDiscoverRequestMessage(message: ServerMessage): message is DiscoverRequestMessage {
   return message.type === "DISCOVER_REQUEST"
@@ -10,6 +10,12 @@ function isDiscoverRequestMessage(message: ServerMessage): message is DiscoverRe
     && typeof message.commandId === "string"
     && "provider" in message
     && typeof message.provider === "string";
+}
+
+function isAgentUpdateRequestMessage(message: ServerMessage): message is AgentUpdateRequestMessage {
+  return message.type === "AGENT_UPDATE_REQUEST"
+    && "commandId" in message && typeof message.commandId === "string"
+    && "version" in message && typeof message.version === "string";
 }
 
 function isDiscoveredDeviceActionRequestMessage(message: ServerMessage): message is DiscoveredDeviceActionRequestMessage {
@@ -40,6 +46,7 @@ function isCommandMessage(message: ServerMessage): message is CommandMessage {
 import type { ProviderRegistry } from "./providers/registry.js";
 import { VERSION } from "./version.js";
 import { getSystemInfo } from "./system-info.js";
+import type { SupervisorClient } from "./supervisor-client.js";
 
 export class DeviceAgent {
   private socket: WebSocket | null = null;
@@ -51,7 +58,8 @@ export class DeviceAgent {
   constructor(
     private readonly config: AgentConfig,
     private readonly providers: ProviderRegistry,
-    private readonly logger: Logger
+    private readonly logger: Logger,
+    private readonly supervisor: SupervisorClient
   ) {
     this.reconnectDelayMs = config.reconnectInitialMs;
   }
@@ -64,7 +72,8 @@ export class DeviceAgent {
       agent_labels: this.config.agentLabels,
       sensorsphere_url: this.config.sensorsphereUrl,
       websocket_url: this.config.wsUrl,
-      providers: this.providers.capabilities().map(item => item.provider)
+      providers: this.providers.capabilities().map(item => item.provider),
+      supervisor_socket: this.config.supervisorSocketPath
     });
     this.connect();
   }
@@ -99,16 +108,7 @@ export class DeviceAgent {
       this.clearReconnect();
       this.reconnectDelayMs = this.config.reconnectInitialMs;
       this.logger.info("Connected to SensorSphere Device Control WebSocket");
-      const systemInfo = getSystemInfo();
-      this.send({
-        type: "HELLO",
-        agentName: this.config.agentName,
-        version: VERSION,
-        hostname: os.hostname(),
-        systemInfo,
-        agentLabels: this.config.agentLabels,
-        capabilities: this.providers.capabilities()
-      });
+      void this.sendHello();
       this.heartbeatTimer = setInterval(() => this.send({ type: "HEARTBEAT" }), this.config.heartbeatIntervalMs);
     });
 
@@ -214,6 +214,11 @@ export class DeviceAgent {
       return;
     }
 
+    if (isAgentUpdateRequestMessage(message)) {
+      await this.executeAgentUpdate(message);
+      return;
+    }
+
     if (isDiscoveredDeviceActionRequestMessage(message)) {
       await this.executeDiscoveredDeviceAction(message);
       return;
@@ -225,6 +230,69 @@ export class DeviceAgent {
     }
 
     await this.executeCommand(message);
+  }
+
+
+  private async sendHello(): Promise<void> {
+    const systemInfo = getSystemInfo();
+    const supervisorAvailable = await this.supervisor.isAvailable();
+    this.send({
+      type: "HELLO",
+      agentName: this.config.agentName,
+      version: VERSION,
+      hostname: os.hostname(),
+      systemInfo,
+      agentLabels: this.config.agentLabels,
+      capabilities: this.providers.capabilities(),
+      agentUpdate: { supported: supervisorAvailable }
+    });
+    this.logger.info("Reported Supervisor Agent availability", { available: supervisorAvailable });
+  }
+
+  private async executeAgentUpdate(request: AgentUpdateRequestMessage): Promise<void> {
+    if (request.expiresAt && Date.parse(request.expiresAt) <= Date.now()) {
+      this.send({ type: "AGENT_UPDATE_RESULT", commandId: request.commandId, status: "REJECTED", error: "Update request expired before execution" });
+      return;
+    }
+
+    if (!(await this.supervisor.isAvailable())) {
+      this.send({ type: "AGENT_UPDATE_RESULT", commandId: request.commandId, status: "FAILED", error: "Supervisor Agent is unavailable" });
+      return;
+    }
+
+    this.logger.info("Forwarding Device Agent update to Supervisor Agent", {
+      command_id: request.commandId,
+      current_version: VERSION,
+      target_version: request.version
+    });
+
+    // A successful update recreates this container. Acknowledge first so SensorSphere
+    // can transition to VERIFYING and then confirm the target version on the next HELLO.
+    this.send({
+      type: "AGENT_UPDATE_RESULT",
+      commandId: request.commandId,
+      status: "ACCEPTED",
+      currentVersion: VERSION,
+      targetVersion: request.version
+    });
+
+    try {
+      const response = await this.supervisor.updateAgent(request.commandId, request.version);
+      if (!response.ok) {
+        const error = response.error || "Supervisor Agent rejected the update";
+        this.send({ type: "AGENT_UPDATE_RESULT", commandId: request.commandId, status: "FAILED", error });
+        this.logger.warn("Supervisor Agent update failed", { command_id: request.commandId, target_version: request.version, error });
+        return;
+      }
+
+      // This result is best-effort: on a real version change this process is normally
+      // terminated by docker compose before the Supervisor response can be relayed.
+      this.send({ type: "AGENT_UPDATE_RESULT", commandId: request.commandId, status: "SUCCESS", result: response.result ?? {} });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.send({ type: "AGENT_UPDATE_RESULT", commandId: request.commandId, status: "FAILED", error: message });
+      this.logger.warn("Failed to communicate with Supervisor Agent", { command_id: request.commandId, target_version: request.version, error: message });
+    }
   }
 
 

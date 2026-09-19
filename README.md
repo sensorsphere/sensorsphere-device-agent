@@ -240,3 +240,10 @@ The provider reads the cluster-wide PVE resource inventory and reports:
 - `PVE_LXC` with a stable id such as `home-pve:lxc:120`
 
 VM and LXC records include `parentProviderId` pointing to their PVE node. Guest IP/MAC enrichment, Proxmox Backup Server discovery and Proxmox Device Control actions are intentionally outside the initial provider foundation.
+
+
+## Supervisor Agent integration
+
+Device Agent 1.2.0 can relay typed self-update requests from SensorSphere to a local `sensorsphere-supervisor-agent` over a Unix socket. The Device Agent never receives Docker daemon access.
+
+By default the shared socket is `/run/sensorsphere-supervisor-agent/supervisor.sock`. When the socket is available, the Device Agent reports `agentUpdate.supported=true` in its `HELLO`. For `AGENT_UPDATE_REQUEST`, the agent sends an `ACCEPTED` result before forwarding the request because a successful update normally recreates the Device Agent container; SensorSphere must verify completion from the version in the next `HELLO`.
