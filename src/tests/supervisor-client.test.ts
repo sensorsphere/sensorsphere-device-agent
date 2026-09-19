@@ -64,3 +64,42 @@ test("SupervisorClient rejects malformed responses", async () => {
     await fixture.close();
   }
 });
+
+
+test("SupervisorClient reads Supervisor self status", async () => {
+  const fixture = await createSocketServer((line, socket) => {
+    assert.deepEqual(JSON.parse(line), { request_id: "self-status-1", action: "GET_SELF_STATUS" });
+    socket.write(`${JSON.stringify({
+      request_id: "self-status-1",
+      ok: true,
+      action: "GET_SELF_STATUS",
+      result: { running_version: "0.3.0", container_state: "running", update: { status: "IDLE" } }
+    })}\n`);
+  });
+  try {
+    const client = new SupervisorClient(fixture.socketPath, 1000);
+    const response = await client.getSelfStatus("self-status-1");
+    assert.equal(response.ok, true);
+    assert.equal((response.result as { running_version: string }).running_version, "0.3.0");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("SupervisorClient sends UPDATE_SELF", async () => {
+  const fixture = await createSocketServer((line, socket) => {
+    assert.deepEqual(JSON.parse(line), {
+      request_id: "self-update-1",
+      action: "UPDATE_SELF",
+      version: "0.4.0"
+    });
+    socket.write(`${JSON.stringify({ request_id: "self-update-1", ok: true, action: "UPDATE_SELF", result: { accepted: true } })}\n`);
+  });
+  try {
+    const client = new SupervisorClient(fixture.socketPath, 1000);
+    const response = await client.updateSelf("self-update-1", "0.4.0");
+    assert.equal(response.ok, true);
+  } finally {
+    await fixture.close();
+  }
+});

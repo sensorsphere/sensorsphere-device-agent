@@ -61,6 +61,13 @@ export interface AgentUpdateRequestMessage {
   expiresAt?: string;
 }
 
+export interface SupervisorUpdateRequestMessage {
+  type: "SUPERVISOR_UPDATE_REQUEST";
+  commandId: string;
+  version: string;
+  expiresAt?: string;
+}
+
 export interface DiscoveredDeviceActionRequestMessage {
   type: "DISCOVERED_DEVICE_ACTION_REQUEST";
   commandId: string;
@@ -70,7 +77,7 @@ export interface DiscoveredDeviceActionRequestMessage {
   parameters?: Record<string, unknown>;
 }
 
-export type ServerMessage = CommandMessage | DiscoverRequestMessage | AgentUpdateRequestMessage | DiscoveredDeviceActionRequestMessage | HelloAckMessage | HeartbeatAckMessage | SyncDevicesMessage | {
+export type ServerMessage = CommandMessage | DiscoverRequestMessage | AgentUpdateRequestMessage | SupervisorUpdateRequestMessage | DiscoveredDeviceActionRequestMessage | HelloAckMessage | HeartbeatAckMessage | SyncDevicesMessage | {
   type: string;
   [key: string]: unknown;
 };

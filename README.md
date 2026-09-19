@@ -244,6 +244,8 @@ VM and LXC records include `parentProviderId` pointing to their PVE node. Guest 
 
 ## Supervisor Agent integration
 
-Device Agent 1.2.0 can relay typed self-update requests from SensorSphere to a local `sensorsphere-supervisor-agent` over a Unix socket. The Device Agent never receives Docker daemon access.
+Device Agent 1.3.0 can relay typed update requests from SensorSphere to a local `sensorsphere-supervisor-agent` over a Unix socket. The Device Agent never receives Docker daemon access.
 
-By default the shared socket is `/run/sensorsphere-supervisor-agent/supervisor.sock`. When the socket is available, the Device Agent reports `agentUpdate.supported=true` in its `HELLO`. For `AGENT_UPDATE_REQUEST`, the agent sends an `ACCEPTED` result before forwarding the request because a successful update normally recreates the Device Agent container; SensorSphere must verify completion from the version in the next `HELLO`.
+By default the shared socket is `/run/sensorsphere-supervisor-agent/supervisor.sock`. When the socket is available, the Device Agent reports `agentUpdate.supported=true` and a `supervisor` object in its `HELLO`, including the Supervisor version, container state, self-update support, and current self-update status. For `AGENT_UPDATE_REQUEST`, the agent sends an `ACCEPTED` result before forwarding the request because a successful Device Agent update normally recreates the Device Agent container; SensorSphere verifies completion from the version in the next `HELLO`.
+
+For `SUPERVISOR_UPDATE_REQUEST`, the Device Agent relays `UPDATE_SELF` to Supervisor Agent 0.3.0 or newer, polls `GET_SELF_STATUS` while the Supervisor is recreated, and returns `SUPERVISOR_UPDATE_RESULT=SUCCESS` only after the target Supervisor version is running. The Device Agent never receives Docker daemon access.

@@ -2,7 +2,7 @@ import os from "node:os";
 import WebSocket from "ws";
 import type { AgentConfig } from "./config.js";
 import type { Logger } from "./logger.js";
-import type { AgentUpdateRequestMessage, CommandMessage, DiscoveredDeviceActionRequestMessage, DiscoverRequestMessage, ServerMessage, SyncDevicesMessage } from "./protocol.js";
+import type { AgentUpdateRequestMessage, CommandMessage, DiscoveredDeviceActionRequestMessage, DiscoverRequestMessage, ServerMessage, SupervisorUpdateRequestMessage, SyncDevicesMessage } from "./protocol.js";
 
 function isDiscoverRequestMessage(message: ServerMessage): message is DiscoverRequestMessage {
   return message.type === "DISCOVER_REQUEST"
@@ -14,6 +14,12 @@ function isDiscoverRequestMessage(message: ServerMessage): message is DiscoverRe
 
 function isAgentUpdateRequestMessage(message: ServerMessage): message is AgentUpdateRequestMessage {
   return message.type === "AGENT_UPDATE_REQUEST"
+    && "commandId" in message && typeof message.commandId === "string"
+    && "version" in message && typeof message.version === "string";
+}
+
+function isSupervisorUpdateRequestMessage(message: ServerMessage): message is SupervisorUpdateRequestMessage {
+  return message.type === "SUPERVISOR_UPDATE_REQUEST"
     && "commandId" in message && typeof message.commandId === "string"
     && "version" in message && typeof message.version === "string";
 }
@@ -46,7 +52,7 @@ function isCommandMessage(message: ServerMessage): message is CommandMessage {
 import type { ProviderRegistry } from "./providers/registry.js";
 import { VERSION } from "./version.js";
 import { getSystemInfo } from "./system-info.js";
-import type { SupervisorClient } from "./supervisor-client.js";
+import type { SupervisorClient, SupervisorSelfStatus } from "./supervisor-client.js";
 
 export class DeviceAgent {
   private socket: WebSocket | null = null;
@@ -219,6 +225,11 @@ export class DeviceAgent {
       return;
     }
 
+    if (isSupervisorUpdateRequestMessage(message)) {
+      await this.executeSupervisorUpdate(message);
+      return;
+    }
+
     if (isDiscoveredDeviceActionRequestMessage(message)) {
       await this.executeDiscoveredDeviceAction(message);
       return;
@@ -235,7 +246,7 @@ export class DeviceAgent {
 
   private async sendHello(): Promise<void> {
     const systemInfo = getSystemInfo();
-    const supervisorAvailable = await this.supervisor.isAvailable();
+    const supervisor = await this.readSupervisorInfo();
     this.send({
       type: "HELLO",
       agentName: this.config.agentName,
@@ -244,9 +255,38 @@ export class DeviceAgent {
       systemInfo,
       agentLabels: this.config.agentLabels,
       capabilities: this.providers.capabilities(),
-      agentUpdate: { supported: supervisorAvailable }
+      agentUpdate: { supported: supervisor.available },
+      supervisor
     });
-    this.logger.info("Reported Supervisor Agent availability", { available: supervisorAvailable });
+    this.logger.info("Reported Supervisor Agent status", supervisor);
+  }
+
+  private async readSupervisorInfo(): Promise<Record<string, unknown>> {
+    const available = await this.supervisor.isAvailable();
+    if (!available) return { available: false, selfUpdateSupported: false };
+
+    try {
+      const response = await this.supervisor.getSelfStatus(`hello-${Date.now()}`);
+      if (!response.ok || !response.result || typeof response.result !== "object") {
+        return { available: true, selfUpdateSupported: false };
+      }
+      const status = response.result as SupervisorSelfStatus;
+      return {
+        available: true,
+        version: status.running_version ?? status.configured_version ?? null,
+        configuredVersion: status.configured_version ?? null,
+        containerState: status.container_state ?? null,
+        selfUpdateSupported: true,
+        updateStatus: status.update?.status ?? null,
+        updateTargetVersion: status.update?.target_version ?? null,
+        updateError: status.update?.error ?? null
+      };
+    } catch (error) {
+      this.logger.warn("Failed to read Supervisor Agent self status", {
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return { available: true, selfUpdateSupported: false };
+    }
   }
 
   private async executeAgentUpdate(request: AgentUpdateRequestMessage): Promise<void> {
@@ -293,6 +333,106 @@ export class DeviceAgent {
       this.send({ type: "AGENT_UPDATE_RESULT", commandId: request.commandId, status: "FAILED", error: message });
       this.logger.warn("Failed to communicate with Supervisor Agent", { command_id: request.commandId, target_version: request.version, error: message });
     }
+  }
+
+
+  private async executeSupervisorUpdate(request: SupervisorUpdateRequestMessage): Promise<void> {
+    if (request.expiresAt && Date.parse(request.expiresAt) <= Date.now()) {
+      this.send({ type: "SUPERVISOR_UPDATE_RESULT", commandId: request.commandId, status: "REJECTED", error: "Supervisor update request expired before execution" });
+      return;
+    }
+
+    if (!(await this.supervisor.isAvailable())) {
+      this.send({ type: "SUPERVISOR_UPDATE_RESULT", commandId: request.commandId, status: "FAILED", error: "Supervisor Agent is unavailable" });
+      return;
+    }
+
+    let currentVersion: string | null = null;
+    try {
+      const current = await this.supervisor.getSelfStatus(`${request.commandId}-before`);
+      if (!current.ok || !current.result || typeof current.result !== "object") {
+        this.send({ type: "SUPERVISOR_UPDATE_RESULT", commandId: request.commandId, status: "FAILED", error: current.error || "Supervisor Agent does not support self-update status" });
+        return;
+      }
+      const status = current.result as SupervisorSelfStatus;
+      currentVersion = status.running_version ?? status.configured_version ?? null;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.send({ type: "SUPERVISOR_UPDATE_RESULT", commandId: request.commandId, status: "FAILED", error: message });
+      return;
+    }
+
+    this.logger.info("Forwarding Supervisor Agent self-update", {
+      command_id: request.commandId,
+      current_version: currentVersion,
+      target_version: request.version
+    });
+
+    this.send({
+      type: "SUPERVISOR_UPDATE_RESULT",
+      commandId: request.commandId,
+      status: "ACCEPTED",
+      currentVersion,
+      targetVersion: request.version
+    });
+
+    try {
+      const response = await this.supervisor.updateSelf(request.commandId, request.version);
+      if (!response.ok) {
+        const error = response.error || "Supervisor Agent rejected its self-update";
+        this.send({ type: "SUPERVISOR_UPDATE_RESULT", commandId: request.commandId, status: "FAILED", error });
+        return;
+      }
+
+      const finalStatus = await this.waitForSupervisorVersion(request.commandId, request.version);
+      this.send({
+        type: "SUPERVISOR_UPDATE_RESULT",
+        commandId: request.commandId,
+        status: "SUCCESS",
+        currentVersion: finalStatus.running_version ?? finalStatus.configured_version ?? request.version,
+        targetVersion: request.version,
+        result: finalStatus
+      });
+      this.logger.info("Supervisor Agent self-update verified", {
+        command_id: request.commandId,
+        target_version: request.version
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.send({ type: "SUPERVISOR_UPDATE_RESULT", commandId: request.commandId, status: "FAILED", error: message });
+      this.logger.warn("Supervisor Agent self-update failed", {
+        command_id: request.commandId,
+        target_version: request.version,
+        error: message
+      });
+    }
+  }
+
+  private async waitForSupervisorVersion(commandId: string, targetVersion: string): Promise<SupervisorSelfStatus> {
+    const deadline = Date.now() + this.config.supervisorRequestTimeoutMs;
+    let attempt = 0;
+    let lastError = "Supervisor Agent did not become available";
+
+    while (Date.now() < deadline) {
+      attempt += 1;
+      try {
+        const response = await this.supervisor.getSelfStatus(`${commandId}-verify-${attempt}`);
+        if (response.ok && response.result && typeof response.result === "object") {
+          const status = response.result as SupervisorSelfStatus;
+          const version = status.running_version ?? status.configured_version ?? null;
+          if (status.container_state === "running" && version === targetVersion) return status;
+          lastError = `Supervisor Agent reported state=${status.container_state ?? "unknown"} version=${version ?? "unknown"}`;
+        } else {
+          lastError = response.error || "Supervisor Agent status request failed";
+        }
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+
+    throw new Error(`Supervisor Agent did not reach version ${targetVersion} before timeout: ${lastError}`);
   }
 
 

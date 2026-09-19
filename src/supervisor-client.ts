@@ -1,10 +1,28 @@
 import fs from "node:fs/promises";
 import net from "node:net";
 
+export type SupervisorAction = "GET_STATUS" | "UPDATE_AGENT" | "GET_SELF_STATUS" | "UPDATE_SELF";
+
+export interface SupervisorSelfStatus {
+  install_dir?: string;
+  configured_image?: string | null;
+  configured_version?: string | null;
+  container_id?: string | null;
+  container_state?: string;
+  running_image?: string | null;
+  running_version?: string | null;
+  update?: {
+    status?: string;
+    previous_version?: string | null;
+    target_version?: string | null;
+    error?: string | null;
+  };
+}
+
 export interface SupervisorResponse {
   request_id: string;
   ok: boolean;
-  action: "GET_STATUS" | "UPDATE_AGENT";
+  action: SupervisorAction;
   result?: unknown;
   error?: string;
 }
@@ -28,7 +46,15 @@ export class SupervisorClient {
     return this.request({ request_id: requestId, action: "UPDATE_AGENT", version });
   }
 
-  private request(payload: Record<string, unknown>): Promise<SupervisorResponse> {
+  async getSelfStatus(requestId: string): Promise<SupervisorResponse> {
+    return this.request({ request_id: requestId, action: "GET_SELF_STATUS" }, Math.min(this.timeoutMs, 5000));
+  }
+
+  async updateSelf(requestId: string, version: string): Promise<SupervisorResponse> {
+    return this.request({ request_id: requestId, action: "UPDATE_SELF", version });
+  }
+
+  private request(payload: Record<string, unknown>, timeoutMs = this.timeoutMs): Promise<SupervisorResponse> {
     return new Promise((resolve, reject) => {
       const socket = net.createConnection(this.socketPath);
       socket.setEncoding("utf8");
@@ -45,8 +71,8 @@ export class SupervisorClient {
       };
 
       const timer = setTimeout(() => {
-        finish(new Error(`Supervisor request timed out after ${this.timeoutMs} ms`));
-      }, this.timeoutMs);
+        finish(new Error(`Supervisor request timed out after ${timeoutMs} ms`));
+      }, timeoutMs);
 
       socket.on("connect", () => {
         socket.write(`${JSON.stringify(payload)}\n`);
