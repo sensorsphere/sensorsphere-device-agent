@@ -15,6 +15,12 @@ const REALTIME_ENTITY_TYPES: EspHomeEntityType[] = [
   "select"
 ];
 
+export function discoveredEspHomeEntities(available: Record<string, string[]>): string[] {
+  return REALTIME_ENTITY_TYPES.flatMap(entityType =>
+    (available[entityType] ?? []).map(id => `${entityType}:${String(id).replace(new RegExp(`^${entityType}-`), "")}`)
+  ).sort();
+}
+
 type MdnsRecord = {
   name?: string;
   type?: string;
@@ -501,13 +507,12 @@ export class EspHomeProvider implements Provider {
         }
         const available = client.getAvailableEntityIds?.() as Record<string, string[]> | undefined;
         if (available) {
-          const lights = available.light ?? [];
-          const switches = available.switch ?? [];
-          device.entities = [
-            ...lights.map(id => `light:${String(id).replace(/^light-/, "")}`),
-            ...switches.map(id => `switch:${String(id).replace(/^switch-/, "")}`)
-          ].sort();
-          console.info(`[ESPHOME] Native API ${connectionHost}: ${lights.length} light(s), ${switches.length} switch(es)`);
+          const discoveredEntities = discoveredEspHomeEntities(available);
+          device.entities = discoveredEntities;
+          const counts = REALTIME_ENTITY_TYPES
+            .map(entityType => `${available[entityType]?.length ?? 0} ${entityType}`)
+            .join(", ");
+          console.info(`[ESPHOME] Native API ${connectionHost}: ${discoveredEntities.length} discoverable entity(ies) (${counts})`);
         }
       } catch (error) {
         device.apiError = error instanceof Error ? error.message : String(error);

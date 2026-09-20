@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { decodeEspHomeEntityValue, decodeEspHomePower, EspHomeProvider } from "../providers/esphome.js";
+import { decodeEspHomeEntityValue, decodeEspHomePower, discoveredEspHomeEntities, EspHomeProvider } from "../providers/esphome.js";
 
 test("EspHomeProvider advertises initial V1 actions", () => {
   const provider = new EspHomeProvider();
@@ -28,4 +28,26 @@ test("decodeEspHomeEntityValue preserves proto3 scalar defaults for realtime ent
   assert.equal(decodeEspHomeEntityValue("text_sensor", { type: "text_sensor" }), "");
   assert.equal(decodeEspHomeEntityValue("select", { type: "select", state: "Auto" }), "Auto");
   assert.equal(decodeEspHomeEntityValue("sensor", undefined), null);
+});
+
+
+test("discoveredEspHomeEntities reports every realtime entity type exposed by ESPHome", () => {
+  assert.deepEqual(discoveredEspHomeEntities({
+    light: ["light-living_room"],
+    switch: ["switch-relay_1", "switch-relay_2"],
+    binary_sensor: ["binary_sensor-status"],
+    sensor: ["sensor-wifi_signal"],
+    text_sensor: ["text_sensor-ip_address"],
+    number: ["number-level"],
+    select: ["select-mode"]
+  }), [
+    "binary_sensor:status",
+    "light:living_room",
+    "number:level",
+    "select:mode",
+    "sensor:wifi_signal",
+    "switch:relay_1",
+    "switch:relay_2",
+    "text_sensor:ip_address"
+  ]);
 });
