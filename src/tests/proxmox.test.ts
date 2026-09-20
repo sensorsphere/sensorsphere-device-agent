@@ -34,6 +34,20 @@ test("ProxmoxProvider discovers and enriches PVE nodes, QEMU VMs and LXC contain
       }));
       return;
     }
+    if (request.url === "/api2/json/cluster/config/nodes") {
+      response.end(JSON.stringify({ data: [{ node: "pve-1", ring1_addr: "7.0.5.11" }] }));
+      return;
+    }
+    if (request.url === "/api2/json/nodes/pve-1/network") {
+      response.end(JSON.stringify({ data: [
+        { iface: "vmbr5", address: "7.0.5.11", cidr: "7.0.5.11/24", priority: 15, type: "bridge" },
+        { iface: "vmbr0", address: "7.0.100.11", cidr: "7.0.100.11/22", gateway: "7.0.100.1", priority: 14, type: "bridge" },
+        { iface: "enxee37320b70ea", type: "eth" },
+        { iface: "enx6697f9c8eae7", type: "eth" },
+        { iface: "lo", address: "127.0.0.1", cidr: "127.0.0.1/8", type: "loopback" }
+      ] }));
+      return;
+    }
     if (request.url === "/api2/json/nodes/pve-1/qemu/101/config") {
       response.end(JSON.stringify({ data: {
         agent: "enabled=1",
@@ -78,6 +92,8 @@ test("ProxmoxProvider discovers and enriches PVE nodes, QEMU VMs and LXC contain
 
     assert.equal(authorization, "PVEAPIToken=sensorsphere@pve!discovery=test-secret");
     assert.ok(requestedPaths.includes("/api2/json/cluster/resources"));
+    assert.ok(requestedPaths.includes("/api2/json/cluster/config/nodes"));
+    assert.ok(requestedPaths.includes("/api2/json/nodes/pve-1/network"));
     assert.ok(requestedPaths.includes("/api2/json/nodes/pve-1/qemu/101/config"));
     assert.ok(requestedPaths.includes("/api2/json/nodes/pve-1/qemu/101/agent/network-get"));
     assert.ok(requestedPaths.includes("/api2/json/nodes/pve-1/lxc/120/config"));
@@ -107,7 +123,11 @@ test("ProxmoxProvider discovers and enriches PVE nodes, QEMU VMs and LXC contain
         node: "pve-1",
         name: "pve-1",
         status: "online",
-        uptime: 1234
+        uptime: 1234,
+        ip: "7.0.100.11",
+        ipAddresses: ["7.0.100.11", "7.0.5.11"],
+        mac: "EE:37:32:0B:70:EA",
+        macAddresses: ["EE:37:32:0B:70:EA", "66:97:F9:C8:EA:E7"]
       },
       {
         kind: "PVE_VM",

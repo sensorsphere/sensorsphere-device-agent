@@ -54,6 +54,26 @@ interface ProxmoxBackupNode {
   maxmem?: unknown;
 }
 
+
+interface ProxmoxNodeNetwork {
+  iface?: unknown;
+  address?: unknown;
+  cidr?: unknown;
+  gateway?: unknown;
+  hwaddress?: unknown;
+  hwaddr?: unknown;
+  mac?: unknown;
+  active?: unknown;
+  priority?: unknown;
+}
+
+interface ProxmoxClusterNodeConfig {
+  node?: unknown;
+  name?: unknown;
+  ring0_addr?: unknown;
+  ring1_addr?: unknown;
+}
+
 interface ProxmoxStorageConfig {
   storage?: unknown;
   type?: unknown;
@@ -179,6 +199,51 @@ function normalizeIp(value: unknown): string | undefined {
   const withoutPrefix = raw.split("/")[0]?.trim();
   if (!withoutPrefix || withoutPrefix === "127.0.0.1" || withoutPrefix === "::1" || withoutPrefix.startsWith("169.254.") || withoutPrefix.toLowerCase().startsWith("fe80:")) return undefined;
   return withoutPrefix;
+}
+
+function interfaceNameMac(value: unknown): string | undefined {
+  const iface = stringValue(value)?.toLowerCase();
+  const match = iface?.match(/^enx([0-9a-f]{12})$/);
+  if (!match) return undefined;
+  return match[1].match(/.{2}/g)?.join(":").toUpperCase();
+}
+
+function uniqueIps(values: Array<string | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => Boolean(value)))];
+}
+
+function uniqueMacs(values: Array<string | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => Boolean(value)))];
+}
+
+function nodeNetworkAddresses(network: ProxmoxNodeNetwork[] | undefined, cluster: ProxmoxClusterNodeConfig | undefined): { ips: string[]; macs: string[] } {
+  const rows = Array.isArray(network) ? network : [];
+  const withAddress = rows.map(row => ({
+    row,
+    ip: normalizeIp(row.address) || normalizeIp(row.cidr),
+    hasGateway: Boolean(normalizeIp(row.gateway)),
+    priority: numberValue(row.priority) ?? Number.MAX_SAFE_INTEGER
+  })).filter(item => item.ip);
+
+  withAddress.sort((left, right) => {
+    if (left.hasGateway !== right.hasGateway) return left.hasGateway ? -1 : 1;
+    return left.priority - right.priority;
+  });
+
+  const ips = uniqueIps([
+    ...withAddress.map(item => item.ip),
+    normalizeIp(cluster?.ring0_addr),
+    normalizeIp(cluster?.ring1_addr)
+  ]);
+
+  const macs = uniqueMacs(rows.flatMap(row => [
+    normalizeMac(row.hwaddress),
+    normalizeMac(row.hwaddr),
+    normalizeMac(row.mac),
+    interfaceNameMac(row.iface)
+  ]));
+
+  return { ips, macs };
 }
 
 function configNetworks(config: ProxmoxGuestConfig): { ips: string[]; macs: string[] } {
@@ -374,6 +439,22 @@ async function discoverPbs(endpoint: ProxmoxEndpointConfig, timeoutMs: number): 
   return [record];
 }
 
+async function enrichNode(
+  endpoint: ProxmoxEndpointConfig,
+  record: ProxmoxDiscoveryRecord,
+  timeoutMs: number,
+  clusterNodes: Map<string, ProxmoxClusterNodeConfig>
+): Promise<ProxmoxDiscoveryRecord> {
+  if (record.kind !== "PVE_NODE" || typeof record.node !== "string") return record;
+  const network = await apiGetOptional<ProxmoxNodeNetwork[]>(endpoint, `/nodes/${encodeURIComponent(record.node)}/network`, timeoutMs);
+  const addresses = nodeNetworkAddresses(network, clusterNodes.get(record.node));
+  return {
+    ...record,
+    ...(addresses.ips[0] ? { ip: addresses.ips[0], ipAddresses: addresses.ips } : {}),
+    ...(addresses.macs[0] ? { mac: addresses.macs[0], macAddresses: addresses.macs } : {})
+  };
+}
+
 async function enrichGuest(endpoint: ProxmoxEndpointConfig, record: ProxmoxDiscoveryRecord, timeoutMs: number): Promise<ProxmoxDiscoveryRecord> {
   if ((record.kind !== "PVE_VM" && record.kind !== "PVE_LXC") || typeof record.node !== "string" || typeof record.vmid !== "number") return record;
   const type = record.kind === "PVE_VM" ? "qemu" : "lxc";
@@ -421,15 +502,27 @@ export class ProxmoxProvider implements Provider {
       if (endpoint.product === "PBS") {
         return discoverPbs(endpoint, effectiveTimeoutMs);
       }
-      const resources = await apiGet<ProxmoxResource[]>(endpoint, "/cluster/resources", effectiveTimeoutMs);
+      const [resources, clusterNodeEntries] = await Promise.all([
+        apiGet<ProxmoxResource[]>(endpoint, "/cluster/resources", effectiveTimeoutMs),
+        apiGetOptional<ProxmoxClusterNodeConfig[]>(endpoint, "/cluster/config/nodes", effectiveTimeoutMs)
+      ]);
       if (!Array.isArray(resources)) {
         throw new Error(`Proxmox endpoint ${endpoint.id} returned an invalid cluster resource list`);
+      }
+      const clusterNodes = new Map<string, ProxmoxClusterNodeConfig>();
+      if (Array.isArray(clusterNodeEntries)) {
+        for (const entry of clusterNodeEntries) {
+          const node = stringValue(entry.node) || stringValue(entry.name);
+          if (node) clusterNodes.set(node, entry);
+        }
       }
       const normalized = resources
         .map(resource => normalizeResource(endpoint, resource))
         .filter((resource): resource is ProxmoxDiscoveryRecord => resource !== null);
       const [enrichedResources, discoveredPbs] = await Promise.all([
-        Promise.all(normalized.map(resource => enrichGuest(endpoint, resource, effectiveTimeoutMs))),
+        Promise.all(normalized.map(resource => resource.kind === "PVE_NODE"
+          ? enrichNode(endpoint, resource, effectiveTimeoutMs, clusterNodes)
+          : enrichGuest(endpoint, resource, effectiveTimeoutMs))),
         discoverPbsFromPveStorage(endpoint, effectiveTimeoutMs, configuredPbsServers)
       ]);
       return [...enrichedResources, ...discoveredPbs];
