@@ -21,6 +21,26 @@ export function discoveredEspHomeEntities(available: Record<string, string[]>): 
   ).sort();
 }
 
+export function discoveredEspHomeEntitiesFromClient(client: any): string[] {
+  const directEntities = typeof client.entitiesByDevice === "function" ? client.entitiesByDevice(undefined) : [];
+  if (Array.isArray(directEntities) && directEntities.length > 0) {
+    const supported = new Set<string>(REALTIME_ENTITY_TYPES);
+    const values = directEntities
+      .filter((entity: unknown): entity is Record<string, unknown> => Boolean(entity) && typeof entity === "object")
+      .filter(entity => typeof entity.type === "string" && supported.has(entity.type))
+      .map(entity => {
+        const type = String(entity.type);
+        const objectId = typeof entity.objectId === "string" ? entity.objectId.trim() : "";
+        return objectId ? `${type}:${objectId}` : "";
+      })
+      .filter(Boolean);
+    if (values.length > 0) return [...new Set(values)].sort();
+  }
+
+  const available = client.getAvailableEntityIds?.() as Record<string, string[]> | undefined;
+  return available ? discoveredEspHomeEntities(available) : [];
+}
+
 type MdnsRecord = {
   name?: string;
   type?: string;
@@ -505,15 +525,12 @@ export class EspHomeProvider implements Provider {
           device.mac = normalizeMacAddress(info.macAddress) || device.mac;
           device.id = device.mac || device.id;
         }
-        const available = client.getAvailableEntityIds?.() as Record<string, string[]> | undefined;
-        if (available) {
-          const discoveredEntities = discoveredEspHomeEntities(available);
-          device.entities = discoveredEntities;
-          const counts = REALTIME_ENTITY_TYPES
-            .map(entityType => `${available[entityType]?.length ?? 0} ${entityType}`)
-            .join(", ");
-          console.info(`[ESPHOME] Native API ${connectionHost}: ${discoveredEntities.length} discoverable entity(ies) (${counts})`);
-        }
+        const discoveredEntities = discoveredEspHomeEntitiesFromClient(client);
+        device.entities = discoveredEntities;
+        const counts = REALTIME_ENTITY_TYPES
+          .map(entityType => `${discoveredEntities.filter(entity => entity.startsWith(`${entityType}:`)).length} ${entityType}`)
+          .join(", ");
+        console.info(`[ESPHOME] Native API ${connectionHost}: ${discoveredEntities.length} discoverable entity(ies) (${counts})`);
       } catch (error) {
         device.apiError = error instanceof Error ? error.message : String(error);
         console.warn(`[ESPHOME] Native API enrichment failed for ${connectionHost}: ${String(device.apiError)}`);

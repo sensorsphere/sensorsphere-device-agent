@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { decodeEspHomeEntityValue, decodeEspHomePower, discoveredEspHomeEntities, EspHomeProvider } from "../providers/esphome.js";
+import { decodeEspHomeEntityValue, decodeEspHomePower, discoveredEspHomeEntities, discoveredEspHomeEntitiesFromClient, EspHomeProvider } from "../providers/esphome.js";
 
 test("EspHomeProvider advertises initial V1 actions", () => {
   const provider = new EspHomeProvider();
@@ -49,5 +49,38 @@ test("discoveredEspHomeEntities reports every realtime entity type exposed by ES
     "switch:relay_1",
     "switch:relay_2",
     "text_sensor:ip_address"
+  ]);
+});
+
+test("discoveredEspHomeEntitiesFromClient prefers the complete entity inventory", () => {
+  const client = {
+    entitiesByDevice: () => [
+      { type: "binary_sensor", objectId: "status" },
+      { type: "sensor", objectId: "wifi_signal_sensor" },
+      { type: "switch", objectId: "relay_1" },
+      { type: "text_sensor", objectId: "ip_address" },
+      { type: "button", objectId: "restart" }
+    ],
+    getAvailableEntityIds: () => ({ switch: ["switch-relay_1"] })
+  };
+  assert.deepEqual(discoveredEspHomeEntitiesFromClient(client), [
+    "binary_sensor:status",
+    "sensor:wifi_signal_sensor",
+    "switch:relay_1",
+    "text_sensor:ip_address"
+  ]);
+});
+
+test("discoveredEspHomeEntitiesFromClient falls back to grouped ids", () => {
+  const client = {
+    entitiesByDevice: () => [],
+    getAvailableEntityIds: () => ({
+      sensor: ["sensor-temperature"],
+      switch: ["switch-relay_1"]
+    })
+  };
+  assert.deepEqual(discoveredEspHomeEntitiesFromClient(client), [
+    "sensor:temperature",
+    "switch:relay_1"
   ]);
 });
