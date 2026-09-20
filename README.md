@@ -222,9 +222,9 @@ The agent reports the host operating system, OS version and processor architectu
 
 ## Proxmox VE and Backup Server discovery
 
-The optional `PROXMOX` provider discovers Proxmox VE inventory and Proxmox Backup Server instances through their HTTPS APIs from the Device Agent network location. It is enabled only when `PROXMOX_ENDPOINTS_JSON` contains at least one endpoint, so SensorSphere does not need direct connectivity to remote Proxmox networks.
+The optional `PROXMOX` provider discovers Proxmox VE inventory and Proxmox Backup Server instances from the Device Agent network location. It is enabled when `PROXMOX_ENDPOINTS_JSON` contains at least one PVE or PBS endpoint, so SensorSphere does not need direct connectivity to remote Proxmox networks.
 
-Configure one or more endpoints in the Device Agent `.env` as a single JSON array. Each `id` is a stable technical scope used to build provider identities and should remain unchanged after devices are imported. Use `product: "PVE"` (default) for port 8006 endpoints and `product: "PBS"` for Backup Server port 8007 endpoints. API token secrets stay local to the Device Agent and are never advertised as provider capabilities or returned in discovery results.
+Configure one or more endpoints in the Device Agent `.env` as a single JSON array. Each `id` is a stable technical scope used to build provider identities and should remain unchanged after devices are imported. Use `product: "PVE"` (default) for port 8006 endpoints. A PVE endpoint automatically inspects its storage configuration and reports any referenced Proxmox Backup Server, so a separate PBS endpoint is not required for basic PBS discovery. An explicit `product: "PBS"` endpoint on port 8007 remains optional when authenticated PBS enrichment (version, node status and uptime) is desired. API token secrets stay local to the Device Agent and are never advertised as provider capabilities or returned in discovery results.
 
 ```sh
 PROXMOX_ENDPOINTS_JSON=[{"id":"home-pve","url":"https://pve-1.example.net:8006","tokenId":"sensorsphere@pve!discovery","tokenSecret":"replace_me","verifyTls":true}]
@@ -238,9 +238,9 @@ The provider reads the cluster-wide PVE resource inventory and reports:
 - `PVE_NODE` with a stable id such as `home-pve:node:pve-1`
 - `PVE_VM` with a stable id such as `home-pve:qemu:101`
 - `PVE_LXC` with a stable id such as `home-pve:lxc:120`
-- `PBS_SERVER` with a stable id such as `home-pbs:pbs`
+- `PBS_SERVER` discovered automatically from PVE storage configuration with an id such as `home-pve:pbs:auto:pbs.example.net:8007`, or `home-pbs:pbs` for an explicit authenticated PBS endpoint
 
-VM and LXC records include `parentProviderId` pointing to their PVE node. Set endpoint `product` to `PVE` (default) or `PBS`; PBS endpoints use `PBSAPIToken` authentication and produce `PBS_SERVER` records. Proxmox Device Control actions remain outside the discovery provider.
+VM and LXC records include `parentProviderId` pointing to their PVE node. For each PVE endpoint the provider also reads `/storage`; entries of type `pbs` are converted into `PBS_SERVER` records without requiring PBS credentials. If the same server is also configured explicitly as a `PBS` endpoint, the explicit authenticated record wins and the PVE-derived record is suppressed. Explicit PBS endpoints use `PBSAPIToken` authentication. Proxmox Device Control actions remain outside the discovery provider.
 
 
 ## Supervisor Agent integration

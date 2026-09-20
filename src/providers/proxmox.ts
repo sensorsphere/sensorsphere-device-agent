@@ -54,6 +54,15 @@ interface ProxmoxBackupNode {
   maxmem?: unknown;
 }
 
+interface ProxmoxStorageConfig {
+  storage?: unknown;
+  type?: unknown;
+  server?: unknown;
+  datastore?: unknown;
+  port?: unknown;
+  disable?: unknown;
+}
+
 export interface ProxmoxDiscoveryRecord extends Record<string, unknown> {
   kind: "PVE_NODE" | "PVE_VM" | "PVE_LXC" | "PBS_SERVER";
   providerId: string;
@@ -78,6 +87,27 @@ function booleanValue(value: unknown): boolean | undefined {
   if (value === 0) return false;
   if (value === 1) return true;
   return undefined;
+}
+
+
+function portValue(value: unknown, fallback: number): number {
+  if (typeof value === "number" && Number.isInteger(value) && value > 0 && value <= 65535) return value;
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
+    const parsed = Number(value.trim());
+    if (Number.isInteger(parsed) && parsed > 0 && parsed <= 65535) return parsed;
+  }
+  return fallback;
+}
+
+function pbsServerKey(server: string, port: number): string {
+  return `${server.trim().toLowerCase()}:${port}`;
+}
+
+function explicitPbsServerKeys(endpoints: ProxmoxEndpointConfig[]): Set<string> {
+  return new Set(endpoints.filter(endpoint => endpoint.product === "PBS").map(endpoint => {
+    const url = new URL(endpoint.url);
+    return pbsServerKey(url.hostname, portValue(url.port, 8007));
+  }));
 }
 
 function normalizeResource(endpoint: ProxmoxEndpointConfig, resource: ProxmoxResource): ProxmoxDiscoveryRecord | null {
@@ -267,6 +297,51 @@ async function apiGetOptional<T>(endpoint: ProxmoxEndpointConfig, path: string, 
   }
 }
 
+async function discoverPbsFromPveStorage(
+  endpoint: ProxmoxEndpointConfig,
+  timeoutMs: number,
+  explicitlyConfiguredPbsServers: Set<string>
+): Promise<ProxmoxDiscoveryRecord[]> {
+  const storageEntries = await apiGetOptional<ProxmoxStorageConfig[]>(endpoint, "/storage", timeoutMs);
+  if (!Array.isArray(storageEntries)) return [];
+
+  const records = new Map<string, ProxmoxDiscoveryRecord>();
+  for (const entry of storageEntries) {
+    if (stringValue(entry.type)?.toLowerCase() !== "pbs") continue;
+    const server = stringValue(entry.server);
+    const storage = stringValue(entry.storage);
+    if (!server || !storage) continue;
+
+    const port = portValue(entry.port, 8007);
+    const serverKey = pbsServerKey(server, port);
+    if (explicitlyConfiguredPbsServers.has(serverKey) || records.has(serverKey)) continue;
+
+    const datastore = stringValue(entry.datastore);
+    const disabled = booleanValue(entry.disable) === true;
+    const providerSafeServer = server.toLowerCase().replace(/[^a-z0-9._-]+/g, "_");
+    const record: ProxmoxDiscoveryRecord = {
+      kind: "PBS_SERVER",
+      providerId: `${endpoint.id}:pbs:auto:${providerSafeServer}:${port}`,
+      endpointId: endpoint.id,
+      product: "PBS",
+      name: server,
+      hostname: server,
+      server,
+      port,
+      status: disabled ? "disabled" : "configured",
+      discoverySource: "PVE_STORAGE",
+      discoveredVia: endpoint.id,
+      storage,
+      ...(datastore ? { datastore } : {})
+    };
+    const serverIp = normalizeIp(server);
+    if (serverIp) record.ip = serverIp;
+    records.set(serverKey, record);
+  }
+
+  return [...records.values()];
+}
+
 async function discoverPbs(endpoint: ProxmoxEndpointConfig, timeoutMs: number): Promise<ProxmoxDiscoveryRecord[]> {
   const versionInfo = await apiGet<ProxmoxBackupVersion>(endpoint, "/version", timeoutMs);
   const nodes = await apiGetOptional<ProxmoxBackupNode[]>(endpoint, "/nodes", timeoutMs);
@@ -341,6 +416,7 @@ export class ProxmoxProvider implements Provider {
 
   async discover(timeoutMs: number): Promise<Array<Record<string, unknown>>> {
     const effectiveTimeoutMs = Math.min(timeoutMs, this.requestTimeoutMs);
+    const configuredPbsServers = explicitPbsServerKeys(this.endpoints);
     const discovered = await Promise.all(this.endpoints.map(async endpoint => {
       if (endpoint.product === "PBS") {
         return discoverPbs(endpoint, effectiveTimeoutMs);
@@ -352,7 +428,11 @@ export class ProxmoxProvider implements Provider {
       const normalized = resources
         .map(resource => normalizeResource(endpoint, resource))
         .filter((resource): resource is ProxmoxDiscoveryRecord => resource !== null);
-      return Promise.all(normalized.map(resource => enrichGuest(endpoint, resource, effectiveTimeoutMs)));
+      const [enrichedResources, discoveredPbs] = await Promise.all([
+        Promise.all(normalized.map(resource => enrichGuest(endpoint, resource, effectiveTimeoutMs))),
+        discoverPbsFromPveStorage(endpoint, effectiveTimeoutMs, configuredPbsServers)
+      ]);
+      return [...enrichedResources, ...discoveredPbs];
     }));
 
     return discovered.flat().sort((left, right) => left.providerId.localeCompare(right.providerId));

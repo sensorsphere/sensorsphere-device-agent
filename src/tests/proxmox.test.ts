@@ -246,3 +246,146 @@ test("ProxmoxProvider discovers Proxmox Backup Server endpoints", async () => {
     await close(server);
   }
 });
+
+
+test("ProxmoxProvider auto-discovers PBS servers referenced by PVE storage configuration", async () => {
+  const requestedPaths: string[] = [];
+  const server = http.createServer((request, response) => {
+    requestedPaths.push(request.url || "");
+    response.setHeader("content-type", "application/json");
+    if (request.url === "/api2/json/cluster/resources") {
+      response.end(JSON.stringify({ data: [{ type: "node", node: "pve-1", status: "online" }] }));
+      return;
+    }
+    if (request.url === "/api2/json/storage") {
+      response.end(JSON.stringify({ data: [
+        { storage: "pbs-main", type: "pbs", server: "10.0.0.50", datastore: "backup", port: 8007 },
+        { storage: "pbs-archive", type: "pbs", server: "10.0.0.50", datastore: "archive", port: 8007 },
+        { storage: "local", type: "dir", path: "/var/lib/vz" }
+      ] }));
+      return;
+    }
+    response.statusCode = 404;
+    response.end(JSON.stringify({ data: null }));
+  });
+
+  const port = await listen(server);
+  try {
+    const provider = new ProxmoxProvider([{
+      id: "home-pve",
+      product: "PVE",
+      url: `http://127.0.0.1:${port}`,
+      tokenId: "sensorsphere@pve!discovery",
+      tokenSecret: "test-secret",
+      verifyTls: true
+    }], 5000);
+
+    const devices = await provider.discover(5000);
+
+    assert.ok(requestedPaths.includes("/api2/json/storage"));
+    assert.deepEqual(devices, [
+      {
+        kind: "PVE_NODE",
+        providerId: "home-pve:node:pve-1",
+        endpointId: "home-pve",
+        node: "pve-1",
+        name: "pve-1",
+        status: "online"
+      },
+      {
+        kind: "PBS_SERVER",
+        providerId: "home-pve:pbs:auto:10.0.0.50:8007",
+        endpointId: "home-pve",
+        product: "PBS",
+        name: "10.0.0.50",
+        hostname: "10.0.0.50",
+        server: "10.0.0.50",
+        port: 8007,
+        status: "configured",
+        discoverySource: "PVE_STORAGE",
+        discoveredVia: "home-pve",
+        storage: "pbs-main",
+        datastore: "backup",
+        ip: "10.0.0.50"
+      }
+    ]);
+  } finally {
+    await close(server);
+  }
+});
+
+test("ProxmoxProvider does not duplicate a PBS server that also has an explicit endpoint", async () => {
+  const pveServer = http.createServer((request, response) => {
+    response.setHeader("content-type", "application/json");
+    if (request.url === "/api2/json/cluster/resources") {
+      response.end(JSON.stringify({ data: [] }));
+      return;
+    }
+    if (request.url === "/api2/json/storage") {
+      response.end(JSON.stringify({ data: [{ storage: "pbs-main", type: "pbs", server: "127.0.0.1", datastore: "backup" }] }));
+      return;
+    }
+    response.statusCode = 404;
+    response.end(JSON.stringify({ data: null }));
+  });
+  const pbsServer = http.createServer((request, response) => {
+    response.setHeader("content-type", "application/json");
+    if (request.url === "/api2/json/version") {
+      response.end(JSON.stringify({ data: { release: "4.2.6-1" } }));
+      return;
+    }
+    if (request.url === "/api2/json/nodes") {
+      response.end(JSON.stringify({ data: [{ node: "pbs-01", status: "online" }] }));
+      return;
+    }
+    response.statusCode = 404;
+    response.end(JSON.stringify({ data: null }));
+  });
+
+  const pvePort = await listen(pveServer);
+  const pbsPort = await listen(pbsServer);
+  try {
+    // The PVE storage points to the same host/port as the explicit PBS endpoint.
+    // Use the actual PBS port in the storage response by replacing its handler.
+    pveServer.removeAllListeners("request");
+    pveServer.on("request", (request, response) => {
+      response.setHeader("content-type", "application/json");
+      if (request.url === "/api2/json/cluster/resources") {
+        response.end(JSON.stringify({ data: [] }));
+        return;
+      }
+      if (request.url === "/api2/json/storage") {
+        response.end(JSON.stringify({ data: [{ storage: "pbs-main", type: "pbs", server: "127.0.0.1", datastore: "backup", port: pbsPort }] }));
+        return;
+      }
+      response.statusCode = 404;
+      response.end(JSON.stringify({ data: null }));
+    });
+
+    const provider = new ProxmoxProvider([
+      {
+        id: "home-pve",
+        product: "PVE",
+        url: `http://127.0.0.1:${pvePort}`,
+        tokenId: "sensorsphere@pve!discovery",
+        tokenSecret: "pve-secret",
+        verifyTls: true
+      },
+      {
+        id: "home-pbs",
+        product: "PBS",
+        url: `http://127.0.0.1:${pbsPort}`,
+        tokenId: "sensorsphere@pbs!discovery",
+        tokenSecret: "pbs-secret",
+        verifyTls: true
+      }
+    ]);
+
+    const devices = await provider.discover(5000);
+    assert.equal(devices.filter(device => device.kind === "PBS_SERVER").length, 1);
+    assert.equal(devices.find(device => device.kind === "PBS_SERVER")?.providerId, "home-pbs:pbs");
+  } finally {
+    await close(pveServer);
+    await close(pbsServer);
+  }
+});
