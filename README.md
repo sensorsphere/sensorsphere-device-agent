@@ -2,7 +2,7 @@
 
 Remote outbound-only agent used by SensorSphere to discover and control devices on networks that are not directly reachable from the SensorSphere server.
 
-Version: **1.1.0**
+Version: **1.8.2**
 
 ## Architecture
 
@@ -44,6 +44,29 @@ Recommended:
 
 - `AGENT_NAME`
 - `AGENT_LABELS`
+
+## Recommended deployment lifecycle
+
+For hosts managed by SensorSphere, install one **Supervisor Agent** per host first. The Supervisor owns local Docker lifecycle operations for Device and Monitor Agents through a Unix socket; it does not expose a network management port.
+
+For a new Device Agent installation, the repository installer remains the simplest bootstrap method:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/sensorsphere/sensorsphere-device-agent/master/scripts/install.sh | VERSION=1.8.2 bash
+```
+
+On first install, edit `~/sensorsphere-device-agent/.env` and configure `SENSORSPHERE_URL` and `SENSORSPHERE_DEVICE_AGENT_TOKEN`, then rerun the same installer. Existing `.env` values are preserved during upgrades.
+
+Once a compatible Device Agent can reach the local Supervisor socket, later Device Agent updates should normally be requested from SensorSphere. For legacy Device Agents that predate Supervisor support, install the Supervisor first, perform one manual Device Agent upgrade with `scripts/install.sh`, then use SensorSphere-managed updates thereafter.
+
+Quick verification:
+
+```sh
+cd ~/sensorsphere-device-agent
+docker compose --env-file .env ps
+docker compose --env-file .env logs --tail=100 device-agent
+test -S /run/sensorsphere-supervisor-agent/supervisor.sock && echo "Supervisor socket OK"
+```
 
 ## Docker distribution
 
