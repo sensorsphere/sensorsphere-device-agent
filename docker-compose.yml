@@ -20,10 +20,10 @@ services:
       ESPHOME_REQUEST_TIMEOUT_MS: "${ESPHOME_REQUEST_TIMEOUT_MS:-5000}"
       ESPHOME_NOISE_PSK: "${ESPHOME_NOISE_PSK:-}"
       PROXMOX_REQUEST_TIMEOUT_MS: "${PROXMOX_REQUEST_TIMEOUT_MS:-5000}"
-      PROXMOX_ENDPOINTS_JSON: "${PROXMOX_ENDPOINTS_JSON:-}"
       SENSORSPHERE_SUPERVISOR_SOCKET_PATH: "${SUPERVISOR_SOCKET_PATH:-/run/sensorsphere-supervisor-agent/supervisor.sock}"
       SENSORSPHERE_SUPERVISOR_REQUEST_TIMEOUT_MS: "${SENSORSPHERE_SUPERVISOR_REQUEST_TIMEOUT_MS:-130000}"
     volumes:
       - ${DATA_DIR:-./data}:/app/data
+      - ${CONFIG_DIR:-./config}:/app/config:ro
       - /etc/os-release:/host/etc/os-release:ro
       - "${SUPERVISOR_SOCKET_DIR:-/run/sensorsphere-supervisor-agent}:/run/sensorsphere-supervisor-agent"

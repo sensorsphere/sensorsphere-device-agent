@@ -40,13 +40,15 @@ if [[ -d "$INSTALL_DIR" ]]; then
 fi
 
 ensure_install_dir() {
-  if mkdir -p "$INSTALL_DIR/data" 2>/dev/null; then
+  if mkdir -p "$INSTALL_DIR/data" "$INSTALL_DIR/config" 2>/dev/null; then
+    chmod 700 "$INSTALL_DIR/config"
     return
   fi
 
   command -v sudo >/dev/null 2>&1 || fail "Cannot create $INSTALL_DIR and sudo is unavailable"
-  sudo mkdir -p "$INSTALL_DIR/data"
+  sudo mkdir -p "$INSTALL_DIR/data" "$INSTALL_DIR/config"
   sudo chown -R "$(id -u):$(id -g)" "$INSTALL_DIR"
+  chmod 700 "$INSTALL_DIR/config"
 }
 
 ensure_install_dir

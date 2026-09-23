@@ -1,4 +1,5 @@
 import os from "node:os";
+import fs from "node:fs";
 import type { LogLevel } from "./logger.js";
 
 export interface ProxmoxEndpointConfig {
@@ -50,25 +51,44 @@ function parseLabels(raw: string | undefined): string[] {
   return [...new Set(raw.split(",").map(value => value.trim()).filter(Boolean))];
 }
 
-function parseProxmoxEndpoints(raw: string | undefined): ProxmoxEndpointConfig[] {
-  const text = raw?.trim();
-  if (!text) return [];
+function yamlScalar(raw: string): unknown {
+  const value = raw.trim();
+  if (value === "true") return true;
+  if (value === "false") return false;
+  try { return JSON.parse(value); } catch { return value; }
+}
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new Error("PROXMOX_ENDPOINTS_JSON must be valid JSON");
+function parseProxmoxYaml(content: string): unknown[] {
+  const endpoints: Array<Record<string, unknown>> = [];
+  let current: Record<string, unknown> | null = null;
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trimEnd();
+    const start = line.match(/^\s*-\s+id:\s*(.+)$/);
+    if (start) {
+      current = { id: yamlScalar(start[1]!) };
+      endpoints.push(current);
+      continue;
+    }
+    const field = line.match(/^\s+(product|url|token_id|token_secret|verify_tls):\s*(.*)$/);
+    if (!current || !field) continue;
+    const key = field[1] === "token_id" ? "tokenId" : field[1] === "token_secret" ? "tokenSecret" : field[1] === "verify_tls" ? "verifyTls" : field[1];
+    current[key!] = yamlScalar(field[2]!);
   }
+  return endpoints;
+}
 
+function parseProxmoxEndpoints(configPath = "/app/config/proxmox.yml"): ProxmoxEndpointConfig[] {
+  if (!fs.existsSync(configPath)) return [];
+
+  const parsed: unknown = parseProxmoxYaml(fs.readFileSync(configPath, "utf8"));
   if (!Array.isArray(parsed)) {
-    throw new Error("PROXMOX_ENDPOINTS_JSON must be a JSON array");
+    throw new Error("proxmox.yml must contain an endpoints list");
   }
 
   const seenIds = new Set<string>();
   return parsed.map((entry, index) => {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      throw new Error(`PROXMOX_ENDPOINTS_JSON[${index}] must be an object`);
+      throw new Error(`proxmox.yml endpoints[${index}] must be an object`);
     }
 
     const value = entry as Record<string, unknown>;
@@ -80,7 +100,7 @@ function parseProxmoxEndpoints(raw: string | undefined): ProxmoxEndpointConfig[]
     const rawProduct = typeof value.product === "string" ? value.product.trim().toUpperCase() : "PVE";
 
     if (!id || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) {
-      throw new Error(`PROXMOX_ENDPOINTS_JSON[${index}].id must contain only letters, digits, '.', '_' or '-'`);
+      throw new Error(`proxmox.yml endpoints[${index}].id must contain only letters, digits, '.', '_' or '-'`);
     }
     if (seenIds.has(id)) {
       throw new Error(`Duplicate Proxmox endpoint id ${id}`);
@@ -91,22 +111,22 @@ function parseProxmoxEndpoints(raw: string | undefined): ProxmoxEndpointConfig[]
     try {
       parsedUrl = new URL(url);
     } catch {
-      throw new Error(`PROXMOX_ENDPOINTS_JSON[${index}].url must be a valid HTTP(S) URL`);
+      throw new Error(`proxmox.yml endpoints[${index}].url must be a valid HTTP(S) URL`);
     }
     if (!["http:", "https:"].includes(parsedUrl.protocol) || parsedUrl.username || parsedUrl.password) {
-      throw new Error(`PROXMOX_ENDPOINTS_JSON[${index}].url must be an HTTP(S) URL without embedded credentials`);
+      throw new Error(`proxmox.yml endpoints[${index}].url must be an HTTP(S) URL without embedded credentials`);
     }
     if (!tokenId || !tokenId.includes("!")) {
-      throw new Error(`PROXMOX_ENDPOINTS_JSON[${index}].tokenId must be a Proxmox API token id such as user@realm!token`);
+      throw new Error(`proxmox.yml endpoints[${index}].token_id must be a Proxmox API token id such as user@realm!token`);
     }
     if (!tokenSecret) {
-      throw new Error(`PROXMOX_ENDPOINTS_JSON[${index}].tokenSecret is required`);
+      throw new Error(`proxmox.yml endpoints[${index}].token_secret is required`);
     }
     if (typeof verifyTls !== "boolean") {
-      throw new Error(`PROXMOX_ENDPOINTS_JSON[${index}].verifyTls must be a boolean`);
+      throw new Error(`proxmox.yml endpoints[${index}].verify_tls must be a boolean`);
     }
     if (rawProduct !== "PVE" && rawProduct !== "PBS") {
-      throw new Error(`PROXMOX_ENDPOINTS_JSON[${index}].product must be PVE or PBS`);
+      throw new Error(`proxmox.yml endpoints[${index}].product must be PVE or PBS`);
     }
 
     parsedUrl.pathname = parsedUrl.pathname.replace(/\/+$/, "");
@@ -157,7 +177,7 @@ export function loadConfig(): AgentConfig {
     esphomeRequestTimeoutMs: positiveInt("ESPHOME_REQUEST_TIMEOUT_MS", 5000),
     esphomeNoisePsk: process.env.ESPHOME_NOISE_PSK?.trim() || null,
     proxmoxRequestTimeoutMs: positiveInt("PROXMOX_REQUEST_TIMEOUT_MS", 5000),
-    proxmoxEndpoints: parseProxmoxEndpoints(process.env.PROXMOX_ENDPOINTS_JSON),
+    proxmoxEndpoints: parseProxmoxEndpoints(),
     supervisorSocketPath: process.env.SENSORSPHERE_SUPERVISOR_SOCKET_PATH?.trim() || "/run/sensorsphere-supervisor-agent/supervisor.sock",
     supervisorRequestTimeoutMs: positiveInt("SENSORSPHERE_SUPERVISOR_REQUEST_TIMEOUT_MS", 130000)
   };
