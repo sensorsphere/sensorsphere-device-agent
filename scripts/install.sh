@@ -125,6 +125,20 @@ else
   fi
 fi
 
+set_env_value() {
+  local key="$1" value="$2"
+  if grep -q "^${key}=" "$INSTALL_DIR/.env"; then
+    sed -i "s|^${key}=.*|${key}=${value}|" "$INSTALL_DIR/.env"
+  else
+    printf '%s=%s\n' "$key" "$value" >> "$INSTALL_DIR/.env"
+  fi
+}
+
+# Explicit bootstrap/reinstall values override the preserved .env when supplied.
+[[ -n "${SENSORSPHERE_URL:-}" ]] && set_env_value SENSORSPHERE_URL "$SENSORSPHERE_URL"
+[[ -n "${SENSORSPHERE_DEVICE_AGENT_TOKEN:-}" ]] && set_env_value SENSORSPHERE_DEVICE_AGENT_TOKEN "$SENSORSPHERE_DEVICE_AGENT_TOKEN"
+[[ -n "${AGENT_NAME:-}" ]] && set_env_value AGENT_NAME "$AGENT_NAME"
+
 IMAGE_VALUE="${IMAGE}:${IMAGE_TAG}"
 
 if grep -q '^DEVICE_AGENT_IMAGE=' "$INSTALL_DIR/.env"; then
@@ -138,7 +152,9 @@ if [[ -n "${ENV_BACKUP:-}" ]]; then
   SENSORSPHERE_URL_AFTER="$(sed -n 's/^SENSORSPHERE_URL=//p' "$INSTALL_DIR/.env" | tail -1)"
   SENSORSPHERE_TOKEN_AFTER="$(sed -n 's/^SENSORSPHERE_DEVICE_AGENT_TOKEN=//p' "$INSTALL_DIR/.env" | tail -1)"
 
-  if [[ "$SENSORSPHERE_URL_AFTER" != "$SENSORSPHERE_URL_BEFORE" || "$SENSORSPHERE_TOKEN_AFTER" != "$SENSORSPHERE_TOKEN_BEFORE" ]]; then
+  SENSORSPHERE_URL_EXPECTED="${SENSORSPHERE_URL:-$SENSORSPHERE_URL_BEFORE}"
+  SENSORSPHERE_TOKEN_EXPECTED="${SENSORSPHERE_DEVICE_AGENT_TOKEN:-$SENSORSPHERE_TOKEN_BEFORE}"
+  if [[ "$SENSORSPHERE_URL_AFTER" != "$SENSORSPHERE_URL_EXPECTED" || "$SENSORSPHERE_TOKEN_AFTER" != "$SENSORSPHERE_TOKEN_EXPECTED" ]]; then
     cp -p "$ENV_BACKUP" "$INSTALL_DIR/.env"
     fail "Protected SensorSphere settings changed unexpectedly. Original .env restored from backup."
   fi
