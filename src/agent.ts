@@ -487,7 +487,7 @@ export class DeviceAgent {
 
 
   private async executeDiscovery(request: DiscoverRequestMessage): Promise<void> {
-    const timeoutMs = Math.min(Math.max(request.timeoutMs ?? 4000, 1000), 15000);
+    const timeoutMs = Math.min(Math.max(request.timeoutMs ?? 8000, 1000), 30000);
     this.logger.info("Executing device discovery", {
       command_id: request.commandId,
       provider: request.provider,

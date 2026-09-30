@@ -41,6 +41,49 @@ export function discoveredEspHomeEntitiesFromClient(client: any): string[] {
   return available ? discoveredEspHomeEntities(available) : [];
 }
 
+export interface RealtimeEspHomeEntityDefinition {
+  type: EspHomeEntityType;
+  id: string;
+  objectId: string;
+  metadata: Record<string, unknown>;
+}
+
+export function realtimeEspHomeEntityDefinitionsFromClient(client: any): RealtimeEspHomeEntityDefinition[] {
+  const supported = new Set<string>(REALTIME_ENTITY_TYPES);
+  const complete = typeof client.getEntitiesWithIds === "function" ? client.getEntitiesWithIds() : [];
+  if (Array.isArray(complete) && complete.length > 0) {
+    const values = complete
+      .filter((entity: unknown): entity is Record<string, unknown> => Boolean(entity) && typeof entity === "object")
+      .filter(entity => typeof entity.type === "string" && supported.has(entity.type))
+      .map(entity => {
+        const type = String(entity.type) as EspHomeEntityType;
+        const id = typeof entity.id === "string" ? entity.id.trim() : "";
+        const objectId = typeof entity.objectId === "string" && entity.objectId.trim()
+          ? entity.objectId.trim()
+          : id.replace(new RegExp(`^${type}-`), "");
+        if (!id || !objectId) return null;
+        return { type, id, objectId, metadata: entity };
+      })
+      .filter((entity): entity is RealtimeEspHomeEntityDefinition => entity !== null);
+    if (values.length > 0) return values;
+  }
+
+  const available = client.getAvailableEntityIds?.() as Record<string, unknown[]> | undefined;
+  if (!available) return [];
+  return REALTIME_ENTITY_TYPES.flatMap(type =>
+    (available[type] ?? []).map(rawId => {
+      const id = String(rawId);
+      const metadata = (client.getEntityById?.(rawId) as Record<string, unknown> | undefined) ?? {};
+      return {
+        type,
+        id,
+        objectId: id.replace(new RegExp(`^${type}-`), ""),
+        metadata
+      };
+    })
+  );
+}
+
 type MdnsRecord = {
   name?: string;
   type?: string;
@@ -411,15 +454,11 @@ export class EspHomeProvider implements Provider {
   }
 
   private initializeRealtimeEntities(subscription: RealtimeSubscription, client: any): void {
-    const available = client.getAvailableEntityIds() as Record<string, unknown[]>;
-    const items = REALTIME_ENTITY_TYPES.flatMap(type =>
-      (available[type] ?? []).map(id => ({ type, id }))
-    );
+    const items = realtimeEspHomeEntityDefinitionsFromClient(client);
     const next = new Map<string, RealtimeEntityState>();
     for (const item of items) {
-      const rawId = String(item.id);
-      const value = entityValue(item.type, rawId);
-      const metadata = (client.getEntityById(item.id) as Record<string, unknown> | undefined) ?? {};
+      const value = `${item.type}:${item.objectId}`;
+      const metadata = item.metadata;
       const latest = client.latest(item.id) as Record<string, unknown> | undefined;
       const currentValue = decodeEspHomeEntityValue(item.type, latest);
       const unit = typeof metadata.unitOfMeasurement === "string" && metadata.unitOfMeasurement.trim()
@@ -427,7 +466,7 @@ export class EspHomeProvider implements Provider {
         : null;
       next.set(value, {
         type: item.type,
-        id: rawId,
+        id: item.id,
         value,
         name: typeof metadata.name === "string" && metadata.name.trim() ? metadata.name.trim() : value,
         power: decodeEspHomePower(item.type, latest),

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { decodeEspHomeEntityValue, decodeEspHomePower, discoveredEspHomeEntities, discoveredEspHomeEntitiesFromClient, EspHomeProvider } from "../providers/esphome.js";
+import { decodeEspHomeEntityValue, decodeEspHomePower, discoveredEspHomeEntities, discoveredEspHomeEntitiesFromClient, EspHomeProvider, realtimeEspHomeEntityDefinitionsFromClient } from "../providers/esphome.js";
 
 test("EspHomeProvider advertises initial V1 actions", () => {
   const provider = new EspHomeProvider();
@@ -83,4 +83,27 @@ test("discoveredEspHomeEntitiesFromClient falls back to grouped ids", () => {
     "sensor:temperature",
     "switch:relay_1"
   ]);
+});
+
+test("realtime ESPHome inventory uses the complete entity registry instead of the grouped control ids", () => {
+  const client = {
+    getEntitiesWithIds: () => [
+      { type: "binary_sensor", id: "binary_sensor-capability_api", objectId: "capability_api", name: "API capability" },
+      { type: "binary_sensor", id: "binary_sensor-capability_ota", objectId: "capability_ota", name: "OTA capability" },
+      { type: "sensor", id: "sensor-temperature", objectId: "temperature", name: "Temperature" },
+      { type: "button", id: "button-restart", objectId: "restart", name: "Restart" }
+    ],
+    getAvailableEntityIds: () => ({
+      sensor: ["sensor-temperature"]
+    })
+  };
+
+  assert.deepEqual(
+    realtimeEspHomeEntityDefinitionsFromClient(client).map(entity => `${entity.type}:${entity.objectId}`).sort(),
+    [
+      "binary_sensor:capability_api",
+      "binary_sensor:capability_ota",
+      "sensor:temperature"
+    ]
+  );
 });

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.9.2 - 2026-09-30
+
+- Use the complete ESPHome entity registry for realtime subscriptions so the Entities view matches Discovery.
+- Increase the Device Agent discovery timeout range to support longer discovery runs.
+
 ## 1.0.0 - 2026-09-09
 
 - Initial SensorSphere Device Agent.
