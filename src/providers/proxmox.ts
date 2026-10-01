@@ -57,14 +57,47 @@ interface ProxmoxBackupNode {
 
 interface ProxmoxNodeNetwork {
   iface?: unknown;
+  type?: unknown;
   address?: unknown;
   cidr?: unknown;
+  netmask?: unknown;
   gateway?: unknown;
+  address6?: unknown;
+  cidr6?: unknown;
+  netmask6?: unknown;
+  gateway6?: unknown;
   hwaddress?: unknown;
   hwaddr?: unknown;
   mac?: unknown;
   active?: unknown;
+  autostart?: unknown;
   priority?: unknown;
+  bridge_ports?: unknown;
+  bridge_vlan_aware?: unknown;
+  comments?: unknown;
+  method?: unknown;
+  method6?: unknown;
+}
+
+interface ProxmoxNodeNetworkInterface {
+  name: string;
+  type?: string;
+  active?: boolean;
+  autostart?: boolean;
+  ip?: string;
+  cidr?: string;
+  netmask?: string;
+  gateway?: string;
+  ipv6?: string;
+  cidr6?: string;
+  netmask6?: string;
+  gateway6?: string;
+  mac?: string;
+  bridgePorts?: string[];
+  vlanAware?: boolean;
+  comment?: string;
+  method?: string;
+  method6?: string;
 }
 
 interface ProxmoxClusterNodeConfig {
@@ -216,6 +249,59 @@ function uniqueMacs(values: Array<string | undefined>): string[] {
   return [...new Set(values.filter((value): value is string => Boolean(value)))];
 }
 
+function bridgePorts(value: unknown): string[] | undefined {
+  const raw = stringValue(value);
+  if (!raw) return undefined;
+  const ports = raw.split(/[\s,]+/).map(item => item.trim()).filter(Boolean);
+  return ports.length ? ports : undefined;
+}
+
+function nodeNetworkInterfaces(network: ProxmoxNodeNetwork[] | undefined): ProxmoxNodeNetworkInterface[] {
+  const rows = Array.isArray(network) ? network : [];
+  return rows.flatMap(row => {
+    const name = stringValue(row.iface);
+    if (!name || name.toLowerCase() === "lo") return [];
+
+    const type = stringValue(row.type);
+    const ip = normalizeIp(row.address) || normalizeIp(row.cidr);
+    const ipv6 = normalizeIp(row.address6) || normalizeIp(row.cidr6);
+    const mac = normalizeMac(row.hwaddress)
+      || normalizeMac(row.hwaddr)
+      || normalizeMac(row.mac)
+      || interfaceNameMac(row.iface);
+    const active = booleanValue(row.active);
+    const autostart = booleanValue(row.autostart);
+    const vlanAware = booleanValue(row.bridge_vlan_aware);
+    const ports = bridgePorts(row.bridge_ports);
+
+    return [{
+      name,
+      ...(type ? { type } : {}),
+      ...(active !== undefined ? { active } : {}),
+      ...(autostart !== undefined ? { autostart } : {}),
+      ...(ip ? { ip } : {}),
+      ...(stringValue(row.cidr) ? { cidr: stringValue(row.cidr)! } : {}),
+      ...(stringValue(row.netmask) ? { netmask: stringValue(row.netmask)! } : {}),
+      ...(normalizeIp(row.gateway) ? { gateway: normalizeIp(row.gateway)! } : {}),
+      ...(ipv6 ? { ipv6 } : {}),
+      ...(stringValue(row.cidr6) ? { cidr6: stringValue(row.cidr6)! } : {}),
+      ...(stringValue(row.netmask6) ? { netmask6: stringValue(row.netmask6)! } : {}),
+      ...(normalizeIp(row.gateway6) ? { gateway6: normalizeIp(row.gateway6)! } : {}),
+      ...(mac ? { mac } : {}),
+      ...(ports ? { bridgePorts: ports } : {}),
+      ...(vlanAware !== undefined ? { vlanAware } : {}),
+      ...(stringValue(row.comments) ? { comment: stringValue(row.comments)! } : {}),
+      ...(stringValue(row.method) ? { method: stringValue(row.method)! } : {}),
+      ...(stringValue(row.method6) ? { method6: stringValue(row.method6)! } : {})
+    }];
+  }).sort((left, right) => {
+    const leftBridge = left.type?.toLowerCase() === "bridge" ? 0 : 1;
+    const rightBridge = right.type?.toLowerCase() === "bridge" ? 0 : 1;
+    return leftBridge - rightBridge
+      || left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: "base" });
+  });
+}
+
 function nodeNetworkAddresses(network: ProxmoxNodeNetwork[] | undefined, cluster: ProxmoxClusterNodeConfig | undefined): { ips: string[]; macs: string[] } {
   const rows = Array.isArray(network) ? network : [];
   const withAddress = rows.map(row => ({
@@ -236,7 +322,12 @@ function nodeNetworkAddresses(network: ProxmoxNodeNetwork[] | undefined, cluster
     normalizeIp(cluster?.ring1_addr)
   ]);
 
-  const macs = uniqueMacs(rows.flatMap(row => [
+  const addressRows = new Set(withAddress.map(item => item.row));
+  const orderedMacRows = [
+    ...withAddress.map(item => item.row),
+    ...rows.filter(row => !addressRows.has(row))
+  ];
+  const macs = uniqueMacs(orderedMacRows.flatMap(row => [
     normalizeMac(row.hwaddress),
     normalizeMac(row.hwaddr),
     normalizeMac(row.mac),
@@ -448,10 +539,12 @@ async function enrichNode(
   if (record.kind !== "PVE_NODE" || typeof record.node !== "string") return record;
   const network = await apiGetOptional<ProxmoxNodeNetwork[]>(endpoint, `/nodes/${encodeURIComponent(record.node)}/network`, timeoutMs);
   const addresses = nodeNetworkAddresses(network, clusterNodes.get(record.node));
+  const networkInterfaces = nodeNetworkInterfaces(network);
   return {
     ...record,
     ...(addresses.ips[0] ? { ip: addresses.ips[0], ipAddresses: addresses.ips } : {}),
-    ...(addresses.macs[0] ? { mac: addresses.macs[0], macAddresses: addresses.macs } : {})
+    ...(addresses.macs[0] ? { mac: addresses.macs[0], macAddresses: addresses.macs } : {}),
+    ...(networkInterfaces.length ? { networkInterfaces } : {})
   };
 }
 

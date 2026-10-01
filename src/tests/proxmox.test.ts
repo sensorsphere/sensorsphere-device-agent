@@ -40,10 +40,12 @@ test("ProxmoxProvider discovers and enriches PVE nodes, QEMU VMs and LXC contain
     }
     if (request.url === "/api2/json/nodes/pve-1/network") {
       response.end(JSON.stringify({ data: [
-        { iface: "vmbr5", address: "7.0.5.11", cidr: "7.0.5.11/24", priority: 15, type: "bridge" },
-        { iface: "vmbr0", address: "7.0.100.11", cidr: "7.0.100.11/22", gateway: "7.0.100.1", priority: 14, type: "bridge" },
-        { iface: "enxee37320b70ea", type: "eth" },
-        { iface: "enx6697f9c8eae7", type: "eth" },
+        { iface: "vmbr5", address: "7.0.5.11", cidr: "7.0.5.11/24", priority: 15, type: "bridge", active: 1, autostart: 1, hwaddress: "00:11:22:68:2b:d5", bridge_ports: "enx1.5" },
+        { iface: "vmbr0", address: "7.0.100.11", cidr: "7.0.100.11/22", gateway: "7.0.100.1", priority: 14, type: "bridge", active: 1, autostart: 1, hwaddress: "00:23:24:b4:8a:24", bridge_ports: "eno1.100", bridge_vlan_aware: 0 },
+        { iface: "vmbr20", type: "bridge", active: 1, autostart: 1, hwaddress: "00:23:24:b4:8a:24", bridge_ports: "eno1.20" },
+        { iface: "vmbr40", type: "bridge", active: 1, autostart: 1, hwaddress: "00:23:24:b4:8a:24", bridge_ports: "eno1.40" },
+        { iface: "enxee37320b70ea", type: "eth", active: 0 },
+        { iface: "enx6697f9c8eae7", type: "eth", active: 1 },
         { iface: "lo", address: "127.0.0.1", cidr: "127.0.0.1/8", type: "loopback" }
       ] }));
       return;
@@ -126,8 +128,60 @@ test("ProxmoxProvider discovers and enriches PVE nodes, QEMU VMs and LXC contain
         uptime: 1234,
         ip: "7.0.100.11",
         ipAddresses: ["7.0.100.11", "7.0.5.11"],
-        mac: "EE:37:32:0B:70:EA",
-        macAddresses: ["EE:37:32:0B:70:EA", "66:97:F9:C8:EA:E7"]
+        mac: "00:23:24:B4:8A:24",
+        macAddresses: ["00:23:24:B4:8A:24", "00:11:22:68:2B:D5", "EE:37:32:0B:70:EA", "66:97:F9:C8:EA:E7"],
+        networkInterfaces: [
+          {
+            name: "vmbr0",
+            type: "bridge",
+            active: true,
+            autostart: true,
+            ip: "7.0.100.11",
+            cidr: "7.0.100.11/22",
+            gateway: "7.0.100.1",
+            mac: "00:23:24:B4:8A:24",
+            bridgePorts: ["eno1.100"],
+            vlanAware: false
+          },
+          {
+            name: "vmbr5",
+            type: "bridge",
+            active: true,
+            autostart: true,
+            ip: "7.0.5.11",
+            cidr: "7.0.5.11/24",
+            mac: "00:11:22:68:2B:D5",
+            bridgePorts: ["enx1.5"]
+          },
+          {
+            name: "vmbr20",
+            type: "bridge",
+            active: true,
+            autostart: true,
+            mac: "00:23:24:B4:8A:24",
+            bridgePorts: ["eno1.20"]
+          },
+          {
+            name: "vmbr40",
+            type: "bridge",
+            active: true,
+            autostart: true,
+            mac: "00:23:24:B4:8A:24",
+            bridgePorts: ["eno1.40"]
+          },
+          {
+            name: "enx6697f9c8eae7",
+            type: "eth",
+            active: true,
+            mac: "66:97:F9:C8:EA:E7"
+          },
+          {
+            name: "enxee37320b70ea",
+            type: "eth",
+            active: false,
+            mac: "EE:37:32:0B:70:EA"
+          }
+        ]
       },
       {
         kind: "PVE_VM",
