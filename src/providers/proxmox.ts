@@ -79,6 +79,16 @@ interface ProxmoxNodeNetwork {
   method6?: unknown;
 }
 
+interface ProxmoxNodeReport {
+  report?: unknown;
+}
+
+interface ProxmoxRuntimeNetworkInterface {
+  name: string;
+  mac?: string;
+  ips: string[];
+}
+
 interface ProxmoxNodeNetworkInterface {
   name: string;
   type?: string;
@@ -254,6 +264,51 @@ function bridgePorts(value: unknown): string[] | undefined {
   if (!raw) return undefined;
   const ports = raw.split(/[\s,]+/).map(item => item.trim()).filter(Boolean);
   return ports.length ? ports : undefined;
+}
+
+function parseRuntimeNetworkInterfaces(report: string | undefined): Map<string, ProxmoxRuntimeNetworkInterface> {
+  const result = new Map<string, ProxmoxRuntimeNetworkInterface>();
+  if (!report) return result;
+
+  let current: ProxmoxRuntimeNetworkInterface | undefined;
+  for (const line of report.split(/\r?\n/)) {
+    const header = line.match(/^\d+:\s+([^:@]+)(?:@[^:]+)?:\s+</);
+    if (header) {
+      current = { name: header[1]!, ips: [] };
+      result.set(current.name, current);
+      continue;
+    }
+    if (!current) continue;
+
+    const mac = line.match(/^\s*link\/ether\s+([0-9a-f:]{17})\b/i);
+    if (mac) {
+      current.mac = normalizeMac(mac[1]) ?? undefined;
+      continue;
+    }
+
+    const ipv4 = line.match(/^\s*inet\s+([^\s/]+)\/\d+\b/);
+    if (ipv4) {
+      const ip = normalizeIp(ipv4[1]);
+      if (ip && !current.ips.includes(ip)) current.ips.push(ip);
+    }
+  }
+
+  return result;
+}
+
+function mergeRuntimeNetworkInterfaces(
+  configured: ProxmoxNodeNetworkInterface[],
+  runtime: Map<string, ProxmoxRuntimeNetworkInterface>
+): ProxmoxNodeNetworkInterface[] {
+  return configured.map(item => {
+    const live = runtime.get(item.name);
+    if (!live) return item;
+    return {
+      ...item,
+      ...(!item.mac && live.mac ? { mac: live.mac } : {}),
+      ...(!item.ip && live.ips[0] ? { ip: live.ips[0] } : {})
+    };
+  });
 }
 
 function nodeNetworkInterfaces(network: ProxmoxNodeNetwork[] | undefined): ProxmoxNodeNetworkInterface[] {
@@ -536,13 +591,27 @@ async function enrichNode(
   clusterNodes: Map<string, ProxmoxClusterNodeConfig>
 ): Promise<ProxmoxDiscoveryRecord> {
   if (record.kind !== "PVE_NODE" || typeof record.node !== "string") return record;
-  const network = await apiGetOptional<ProxmoxNodeNetwork[]>(endpoint, `/nodes/${encodeURIComponent(record.node)}/network`, timeoutMs);
+  const nodePath = `/nodes/${encodeURIComponent(record.node)}`;
+  const [network, reportData] = await Promise.all([
+    apiGetOptional<ProxmoxNodeNetwork[]>(endpoint, `${nodePath}/network`, timeoutMs),
+    apiGetOptional<ProxmoxNodeReport | string>(endpoint, `${nodePath}/report`, timeoutMs)
+  ]);
   const addresses = nodeNetworkAddresses(network, clusterNodes.get(record.node));
-  const networkInterfaces = nodeNetworkInterfaces(network);
+  const configuredInterfaces = nodeNetworkInterfaces(network);
+  const report = typeof reportData === "string" ? reportData : stringValue(reportData?.report);
+  const networkInterfaces = mergeRuntimeNetworkInterfaces(
+    configuredInterfaces,
+    parseRuntimeNetworkInterfaces(report)
+  );
+  const identityMacs = uniqueMacs(
+    networkInterfaces
+      .filter(item => Boolean(item.ip))
+      .map(item => item.mac)
+  );
   return {
     ...record,
     ...(addresses.ips[0] ? { ip: addresses.ips[0], ipAddresses: addresses.ips } : {}),
-    ...(addresses.macs[0] ? { mac: addresses.macs[0], macAddresses: addresses.macs } : {}),
+    ...(identityMacs[0] ? { mac: identityMacs[0], macAddresses: identityMacs } : {}),
     ...(networkInterfaces.length ? { networkInterfaces } : {})
   };
 }

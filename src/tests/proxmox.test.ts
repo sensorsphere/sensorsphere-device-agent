@@ -50,6 +50,19 @@ test("ProxmoxProvider discovers and enriches PVE nodes, QEMU VMs and LXC contain
       ] }));
       return;
     }
+    if (request.url === "/api2/json/nodes/pve-1/report") {
+      response.end(JSON.stringify({ data: { report: `# ip addr
+7: vmbr0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500
+    link/ether 00:23:24:b4:8a:24 brd ff:ff:ff:ff:ff:ff
+    inet 7.0.100.11/22 scope global vmbr0
+9: vmbr5: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500
+    link/ether 00:11:22:68:2b:d5 brd ff:ff:ff:ff:ff:ff
+    inet 7.0.5.11/24 scope global vmbr5
+20: tap101i0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500
+    link/ether de:ad:be:ef:00:01 brd ff:ff:ff:ff:ff:ff
+` } }));
+      return;
+    }
     if (request.url === "/api2/json/nodes/pve-1/qemu/101/config") {
       response.end(JSON.stringify({ data: {
         agent: "enabled=1",
@@ -96,6 +109,7 @@ test("ProxmoxProvider discovers and enriches PVE nodes, QEMU VMs and LXC contain
     assert.ok(requestedPaths.includes("/api2/json/cluster/resources"));
     assert.ok(requestedPaths.includes("/api2/json/cluster/config/nodes"));
     assert.ok(requestedPaths.includes("/api2/json/nodes/pve-1/network"));
+    assert.ok(requestedPaths.includes("/api2/json/nodes/pve-1/report"));
     assert.ok(requestedPaths.includes("/api2/json/nodes/pve-1/qemu/101/config"));
     assert.ok(requestedPaths.includes("/api2/json/nodes/pve-1/qemu/101/agent/network-get"));
     assert.ok(requestedPaths.includes("/api2/json/nodes/pve-1/lxc/120/config"));
@@ -128,6 +142,8 @@ test("ProxmoxProvider discovers and enriches PVE nodes, QEMU VMs and LXC contain
         uptime: 1234,
         ip: "7.0.100.11",
         ipAddresses: ["7.0.100.11", "7.0.5.11"],
+        mac: "00:23:24:B4:8A:24",
+        macAddresses: ["00:23:24:B4:8A:24", "00:11:22:68:2B:D5"],
         networkInterfaces: [
           {
             name: "vmbr0",
@@ -137,6 +153,7 @@ test("ProxmoxProvider discovers and enriches PVE nodes, QEMU VMs and LXC contain
             ip: "7.0.100.11",
             cidr: "7.0.100.11/22",
             gateway: "7.0.100.1",
+            mac: "00:23:24:B4:8A:24",
             bridgePorts: ["eno1.100"],
             vlanAware: false
           },
@@ -147,6 +164,7 @@ test("ProxmoxProvider discovers and enriches PVE nodes, QEMU VMs and LXC contain
             autostart: true,
             ip: "7.0.5.11",
             cidr: "7.0.5.11/24",
+            mac: "00:11:22:68:2B:D5",
             bridgePorts: ["enx1.5"]
           },
           {
