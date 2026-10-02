@@ -322,16 +322,15 @@ function nodeNetworkAddresses(network: ProxmoxNodeNetwork[] | undefined, cluster
     normalizeIp(cluster?.ring1_addr)
   ]);
 
-  const addressRows = new Set(withAddress.map(item => item.row));
-  const orderedMacRows = [
-    ...withAddress.map(item => item.row),
-    ...rows.filter(row => !addressRows.has(row))
-  ];
-  const macs = uniqueMacs(orderedMacRows.flatMap(row => [
-    normalizeMac(row.hwaddress),
-    normalizeMac(row.hwaddr),
-    normalizeMac(row.mac),
-    interfaceNameMac(row.iface)
+  // A node MAC identity must belong to an interface that actually carries
+  // one of the node IP addresses. Do not flatten unrelated physical-interface
+  // MAC addresses into the node summary: that creates false IP/MAC associations.
+  // Those MACs remain available in networkInterfaces for diagnostic display.
+  const macs = uniqueMacs(withAddress.flatMap(item => [
+    normalizeMac(item.row.hwaddress),
+    normalizeMac(item.row.hwaddr),
+    normalizeMac(item.row.mac),
+    interfaceNameMac(item.row.iface)
   ]));
 
   return { ips, macs };
