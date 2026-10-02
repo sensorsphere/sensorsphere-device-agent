@@ -588,6 +588,7 @@ async function enrichNode(
   endpoint: ProxmoxEndpointConfig,
   record: ProxmoxDiscoveryRecord,
   timeoutMs: number,
+  reportTimeoutMs: number,
   clusterNodes: Map<string, ProxmoxClusterNodeConfig>
 ): Promise<ProxmoxDiscoveryRecord> {
   if (record.kind !== "PVE_NODE" || typeof record.node !== "string") return record;
@@ -596,7 +597,7 @@ async function enrichNode(
   let reportData: ProxmoxNodeReport | string | undefined;
   let reportError: string | undefined;
   try {
-    reportData = await apiGet<ProxmoxNodeReport | string>(endpoint, `${nodePath}/report`, timeoutMs);
+    reportData = await apiGet<ProxmoxNodeReport | string>(endpoint, `${nodePath}/report`, reportTimeoutMs);
   } catch (error) {
     reportError = error instanceof Error ? error.message : String(error);
   }
@@ -617,6 +618,7 @@ async function enrichNode(
   const runtimeNetwork = {
     reportStatus: reportError ? "ERROR" : report ? "OK" : "EMPTY",
     ...(reportError ? { reportError } : {}),
+    reportTimeoutMs,
     reportBytes: report?.length ?? 0,
     parsedInterfaces: runtimeInterfaces.size,
     matchedInterfaces: matchedInterfaces.length,
@@ -673,6 +675,7 @@ export class ProxmoxProvider implements Provider {
 
   async discover(timeoutMs: number): Promise<Array<Record<string, unknown>>> {
     const effectiveTimeoutMs = Math.min(timeoutMs, this.requestTimeoutMs);
+    const reportTimeoutMs = Math.min(Math.max(timeoutMs, 20_000), 30_000);
     const configuredPbsServers = explicitPbsServerKeys(this.endpoints);
     const discovered = await Promise.all(this.endpoints.map(async endpoint => {
       if (endpoint.product === "PBS") {
@@ -697,7 +700,7 @@ export class ProxmoxProvider implements Provider {
         .filter((resource): resource is ProxmoxDiscoveryRecord => resource !== null);
       const [enrichedResources, discoveredPbs] = await Promise.all([
         Promise.all(normalized.map(resource => resource.kind === "PVE_NODE"
-          ? enrichNode(endpoint, resource, effectiveTimeoutMs, clusterNodes)
+          ? enrichNode(endpoint, resource, effectiveTimeoutMs, reportTimeoutMs, clusterNodes)
           : enrichGuest(endpoint, resource, effectiveTimeoutMs))),
         discoverPbsFromPveStorage(endpoint, effectiveTimeoutMs, configuredPbsServers)
       ]);

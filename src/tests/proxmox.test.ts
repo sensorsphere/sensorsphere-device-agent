@@ -198,6 +198,7 @@ test("ProxmoxProvider discovers and enriches PVE nodes, QEMU VMs and LXC contain
         ],
         runtimeNetwork: {
           reportStatus: "OK",
+          reportTimeoutMs: 20000,
           reportBytes: 423,
           parsedInterfaces: 3,
           matchedInterfaces: 2,
@@ -389,6 +390,7 @@ test("ProxmoxProvider auto-discovers PBS servers referenced by PVE storage confi
         runtimeNetwork: {
           reportStatus: "ERROR",
           reportError: "Proxmox endpoint home-pve returned HTTP 404",
+          reportTimeoutMs: 20000,
           reportBytes: 0,
           parsedInterfaces: 0,
           matchedInterfaces: 0,
