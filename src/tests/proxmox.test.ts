@@ -52,7 +52,7 @@ test("ProxmoxProvider discovers and enriches PVE nodes, QEMU VMs and LXC contain
     }
     if (request.url === "/api2/json/nodes/pve-1/report") {
       response.end(JSON.stringify({ data: { report: `# ip addr
-7: vmbr0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500
+    7: vmbr0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500
     link/ether 00:23:24:b4:8a:24 brd ff:ff:ff:ff:ff:ff
     inet 7.0.100.11/22 scope global vmbr0
 9: vmbr5: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500
@@ -195,7 +195,14 @@ test("ProxmoxProvider discovers and enriches PVE nodes, QEMU VMs and LXC contain
             active: false,
             mac: "EE:37:32:0B:70:EA"
           }
-        ]
+        ],
+        runtimeNetwork: {
+          reportStatus: "OK",
+          reportBytes: 423,
+          parsedInterfaces: 3,
+          matchedInterfaces: 2,
+          matchedMacs: 2
+        }
       },
       {
         kind: "PVE_VM",
@@ -378,7 +385,15 @@ test("ProxmoxProvider auto-discovers PBS servers referenced by PVE storage confi
         endpointId: "home-pve",
         node: "pve-1",
         name: "pve-1",
-        status: "online"
+        status: "online",
+        runtimeNetwork: {
+          reportStatus: "ERROR",
+          reportError: "Proxmox endpoint home-pve returned HTTP 404",
+          reportBytes: 0,
+          parsedInterfaces: 0,
+          matchedInterfaces: 0,
+          matchedMacs: 0
+        }
       },
       {
         kind: "PBS_SERVER",

@@ -272,7 +272,7 @@ function parseRuntimeNetworkInterfaces(report: string | undefined): Map<string, 
 
   let current: ProxmoxRuntimeNetworkInterface | undefined;
   for (const line of report.split(/\r?\n/)) {
-    const header = line.match(/^\d+:\s+([^:@]+)(?:@[^:]+)?:\s+</);
+    const header = line.match(/^\s*\d+:\s+([^:@\s]+)(?:@[^:]+)?:\s+</);
     if (header) {
       current = { name: header[1]!, ips: [] };
       result.set(current.name, current);
@@ -592,27 +592,42 @@ async function enrichNode(
 ): Promise<ProxmoxDiscoveryRecord> {
   if (record.kind !== "PVE_NODE" || typeof record.node !== "string") return record;
   const nodePath = `/nodes/${encodeURIComponent(record.node)}`;
-  const [network, reportData] = await Promise.all([
-    apiGetOptional<ProxmoxNodeNetwork[]>(endpoint, `${nodePath}/network`, timeoutMs),
-    apiGetOptional<ProxmoxNodeReport | string>(endpoint, `${nodePath}/report`, timeoutMs)
-  ]);
+  const networkPromise = apiGetOptional<ProxmoxNodeNetwork[]>(endpoint, `${nodePath}/network`, timeoutMs);
+  let reportData: ProxmoxNodeReport | string | undefined;
+  let reportError: string | undefined;
+  try {
+    reportData = await apiGet<ProxmoxNodeReport | string>(endpoint, `${nodePath}/report`, timeoutMs);
+  } catch (error) {
+    reportError = error instanceof Error ? error.message : String(error);
+  }
+  const network = await networkPromise;
   const addresses = nodeNetworkAddresses(network, clusterNodes.get(record.node));
   const configuredInterfaces = nodeNetworkInterfaces(network);
   const report = typeof reportData === "string" ? reportData : stringValue(reportData?.report);
-  const networkInterfaces = mergeRuntimeNetworkInterfaces(
-    configuredInterfaces,
-    parseRuntimeNetworkInterfaces(report)
-  );
+  const runtimeInterfaces = parseRuntimeNetworkInterfaces(report);
+  const networkInterfaces = mergeRuntimeNetworkInterfaces(configuredInterfaces, runtimeInterfaces);
+  const configuredNames = new Set(configuredInterfaces.map(item => item.name));
+  const matchedInterfaces = [...runtimeInterfaces.keys()].filter(name => configuredNames.has(name));
+  const matchedMacs = networkInterfaces.filter(item => Boolean(item.mac) && matchedInterfaces.includes(item.name));
   const identityMacs = uniqueMacs(
     networkInterfaces
       .filter(item => Boolean(item.ip))
       .map(item => item.mac)
   );
+  const runtimeNetwork = {
+    reportStatus: reportError ? "ERROR" : report ? "OK" : "EMPTY",
+    ...(reportError ? { reportError } : {}),
+    reportBytes: report?.length ?? 0,
+    parsedInterfaces: runtimeInterfaces.size,
+    matchedInterfaces: matchedInterfaces.length,
+    matchedMacs: matchedMacs.length
+  };
   return {
     ...record,
     ...(addresses.ips[0] ? { ip: addresses.ips[0], ipAddresses: addresses.ips } : {}),
     ...(identityMacs[0] ? { mac: identityMacs[0], macAddresses: identityMacs } : {}),
-    ...(networkInterfaces.length ? { networkInterfaces } : {})
+    ...(networkInterfaces.length ? { networkInterfaces } : {}),
+    runtimeNetwork
   };
 }
 
